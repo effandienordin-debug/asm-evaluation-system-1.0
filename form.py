@@ -113,10 +113,23 @@ st.write(f"**Overall Progress: {done_count} / {total_count} Proposals Evaluated*
 st.progress(done_count / total_count if total_count > 0 else 0)
 st.divider()
 
-# --- 9. EVALUATION FORM & NAVIGATION ---
+# --- 9. SELECTION LOGIC (FIX FOR StreamlitAPIException) ---
 if "proposal_selector" not in st.session_state:
     st.session_state.proposal_selector = "-- Select --"
 
+# Check if a row was selected in the summary table BEFORE rendering the selectbox
+if "summary_table" in st.session_state:
+    selection = st.session_state.summary_table.get("selection", {}).get("rows", [])
+    if selection:
+        selected_row_index = selection[0]
+        # Map the row index back to the proposal title
+        clicked_prop = scored_df.iloc[selected_row_index]["proposal_title"]
+        st.session_state.proposal_selector = clicked_prop
+        # Clear the selection to prevent rerun loops
+        st.session_state.summary_table["selection"]["rows"] = []
+        st.rerun()
+
+# --- 10. EVALUATION FORM & NAVIGATION ---
 selected_proposal = st.selectbox(
     "Select Proposal Title", 
     ["-- Select --"] + PROPOSALS,
@@ -152,13 +165,11 @@ if selected_proposal != "-- Select --":
             inputs = {}
             for name, weight in CRITERIA:
                 col_db = name.lower().replace(" ", "_")
-                # Load: Session State > DB > 0.0
                 saved_val = st.session_state.get(f"{draft_key}_{col_db}", float(existing_data[col_db]) if existing_data is not None else 0.0)
                 inputs[name] = st.number_input(f"{name} ({int(weight*100)}%)", 0.0, 5.0, saved_val, 0.1)
             
             saved_comm = st.session_state.get(f"{draft_key}_comm", str(existing_data['comments']) if existing_data is not None else "")
             user_comments = st.text_area("Comments / Remarks", value=saved_comm)
-            
             recom = st.radio("Recommendation", ["Pending", "Approve", "Revise", "Reject"], horizontal=True)
             
             col_sub, col_can = st.columns(2)
@@ -195,9 +206,9 @@ if selected_proposal != "-- Select --":
         st.session_state[f"{draft_key}_comm"] = user_comments
 
 else:
-    # --- 10. CLICKABLE SUMMARY TABLE ---
+    # --- 11. CLICKABLE SUMMARY TABLE ---
     st.subheader("📊 Your Evaluation Summary")
-    st.info("💡 Click a row in the table below to view or edit that proposal.")
+    st.info("💡 Click a row in the table below to edit that proposal.")
     
     if not scored_df.empty:
         summary_display = scored_df.rename(columns={
@@ -206,21 +217,15 @@ else:
             "comments": "Remarks"
         })
         
-        # Enable row selection
-        event = st.dataframe(
+        # We assign a 'key' here so Section 9 can see the selection on rerun
+        st.dataframe(
             summary_display,
             use_container_width=True,
             hide_index=True,
             on_select="rerun",
-            selection_mode="single-row"
+            selection_mode="single-row",
+            key="summary_table"
         )
-        
-        # If user clicks a row, set the selector and rerun
-        if event and event.selection.rows:
-            selected_idx = event.selection.rows[0]
-            clicked_prop = summary_display.iloc[selected_idx]["Proposal Name"]
-            st.session_state.proposal_selector = clicked_prop
-            st.rerun()
     else:
         st.info("No proposals evaluated yet.")
 
@@ -232,7 +237,7 @@ else:
                     st.session_state.proposal_selector = p
                     st.rerun()
 
-    # --- 11. CONDITIONAL FINALIZE ---
+    # --- 12. CONDITIONAL FINALIZE ---
     all_done = (len(remaining) == 0 and total_count > 0)
     if all_done:
         st.divider()

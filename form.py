@@ -49,7 +49,7 @@ def check_password():
 if not check_password():
     st.stop()
 
-# --- 4. CALLBACK FUNCTIONS (The Fix for Navigation Errors) ---
+# --- 4. NAVIGATION CALLBACKS (The "Safe" Way to Change State) ---
 def nav_to_summary():
     st.session_state.proposal_selector = "-- Select --"
     st.session_state.is_editing = False
@@ -100,7 +100,18 @@ try:
 except:
     pass
 
-# --- 8. HEADER ---
+# --- 8. INITIALIZE STATE & PENDING REDIRECTS ---
+if "proposal_selector" not in st.session_state:
+    st.session_state.proposal_selector = "-- Select --"
+
+# IMPORTANT: Handle redirects BEFORE any widgets are drawn
+if st.session_state.get("pending_nav"):
+    st.session_state.proposal_selector = "-- Select --"
+    st.session_state.is_editing = False
+    del st.session_state["pending_nav"]
+    st.rerun()
+
+# --- 9. HEADER ---
 cache_buster = int(datetime.now().timestamp())
 col_img, col_txt = st.columns([1, 4])
 with col_img:
@@ -111,7 +122,7 @@ with col_txt:
     st.title(f"Welcome, {current_user}")
     st.write("Official ASM Evaluation Portal")
 
-# --- 9. PROGRESS DATA FETCH ---
+# --- 10. PROGRESS DATA FETCH ---
 try:
     scored_df = conn.query("SELECT proposal_title, total, comments FROM scores WHERE evaluator = :ev", params={"ev": current_user}, ttl=0)
     completed_proposals = scored_df['proposal_title'].tolist() if not scored_df.empty else []
@@ -125,21 +136,17 @@ st.write(f"**Overall Progress: {done_count} / {total_count} Proposals Evaluated*
 st.progress(done_count / total_count if total_count > 0 else 0)
 st.divider()
 
-# --- 10. SELECTION LOGIC (TABLE CLICKS) ---
-if "proposal_selector" not in st.session_state:
-    st.session_state.proposal_selector = "-- Select --"
-
+# --- 11. CLICKABLE TABLE LOGIC ---
 if "summary_table" in st.session_state:
     selection = st.session_state.summary_table.get("selection", {}).get("rows", [])
     if selection:
         selected_row_index = selection[0]
         clicked_prop = scored_df.iloc[selected_row_index]["proposal_title"]
-        # Use callback logic here
         nav_to_proposal(clicked_prop)
         st.session_state.summary_table["selection"]["rows"] = []
         st.rerun()
 
-# --- 11. EVALUATION FORM & NAVIGATION ---
+# --- 12. EVALUATION FORM & NAVIGATION ---
 selected_proposal = st.selectbox(
     "Select Proposal Title", 
     ["-- Select --"] + PROPOSALS,
@@ -164,7 +171,6 @@ if selected_proposal != "-- Select --":
         with col_edit:
             st.button("✏️ Edit Scores", use_container_width=True, on_click=enable_editing)
         with col_back:
-            # FIX: Use callback to navigate safely
             st.button("⬅️ Back to Summary", use_container_width=True, on_click=nav_to_summary)
     else:
         with st.form("evaluation_form"):
@@ -197,21 +203,22 @@ if selected_proposal != "-- Select --":
                               {"ev": current_user, "prop": selected_proposal, "s1": inputs['Strategic Alignment'], "s2": inputs['Potential Impact'], "s3": inputs['Feasibility'], "s4": inputs['Budget Justification'], "s5": inputs['Timeline Readiness'], "s6": inputs['Execution Strategy'], "tot": final_total, "rec": recom, "comm": user_comments, "ts": datetime.now()})
                     s.commit()
                 
-                nav_to_summary() # Call logic
+                st.session_state.pending_nav = True
                 st.success("Evaluation Saved!")
                 time.sleep(1)
                 st.rerun()
             
             if cancel:
-                nav_to_summary() # Call logic
+                st.session_state.pending_nav = True
                 st.rerun()
 
+        # Update draft state silently
         for name, _ in CRITERIA:
             st.session_state[f"{draft_key}_{name.lower().replace(' ', '_')}"] = inputs[name]
         st.session_state[f"{draft_key}_comm"] = user_comments
 
 else:
-    # --- 12. CLICKABLE SUMMARY TABLE ---
+    # --- 13. SUMMARY DASHBOARD ---
     st.subheader("📊 Your Evaluation Summary")
     st.info("💡 Click a row in the table below to edit that proposal.")
     
@@ -237,10 +244,9 @@ else:
     if remaining:
         with st.expander("⏳ View Remaining Proposals"):
             for p in remaining:
-                # Use callback for these buttons too
                 st.button(f"📝 Start: {p}", key=f"btn_{p}", use_container_width=True, on_click=nav_to_proposal, args=(p,))
 
-    # --- 13. CONDITIONAL FINALIZE ---
+    # --- 14. CONDITIONAL FINALIZE ---
     all_done = (len(remaining) == 0 and total_count > 0)
     if all_done:
         st.divider()

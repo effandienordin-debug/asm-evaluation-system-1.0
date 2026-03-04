@@ -1,12 +1,8 @@
 import streamlit as st
 import pandas as pd
-import os
 from datetime import datetime
 
 # --- Configuration ---
-DATA_FILE = "asm_scores.csv"
-TITLES_FILE = "proposal_titles.txt"
-EVALS_FILE = "evaluators_list.txt"
 CRITERIA = [
     ('Strategic Alignment', 0.25), ('Potential Impact', 0.20), 
     ('Feasibility', 0.15), ('Budget Justification', 0.15), 
@@ -15,13 +11,22 @@ CRITERIA = [
 
 st.set_page_config(page_title="ASM Evaluator Entry", layout="centered")
 
-def get_list(f): 
-    return [l.strip() for l in open(f, "r").readlines() if l.strip()] if os.path.exists(f) else []
+# --- Database Connection ---
+# This looks for [connections.postgresql] in your Streamlit Secrets (TOML)
+conn = st.connection("postgresql", type="sql")
 
-EVALUATORS = get_list(EVALS_FILE)
-PROPOSALS = get_list(TITLES_FILE)
+# --- Fetch Lists from SQL ---
+def get_cloud_list(table, column):
+    try:
+        df = conn.query(f"SELECT {column} FROM {table} ORDER BY {column} ASC;", ttl="2s")
+        return df[column].tolist()
+    except:
+        return []
 
-# --- User Identification ---
+EVALUATORS = get_cloud_list("evaluators", "name")
+PROPOSALS = get_cloud_list("proposals", "title")
+
+# --- User Identification via URL ---
 user_id = st.query_params.get("user")
 if user_id is None or not EVALUATORS:
     st.warning("⚠️ Access Denied. Please use your personalized link.")
@@ -38,21 +43,13 @@ st.title(f"👤 {current_user}")
 selected_proposal = st.selectbox("Select Proposal Title", ["-- Select --"] + PROPOSALS)
 
 if selected_proposal != "-- Select --":
-    # --- LOAD EXISTING DATA ---
+    # --- LOAD EXISTING DATA FROM SQL ---
     existing_data = None
-    if os.path.exists(DATA_FILE):
-        try:
-            df_load = pd.read_csv(DATA_FILE)
-            # Ensure the first column is named 'Evaluator' for matching
-            if not df_load.empty and 'Evaluator' not in df_load.columns:
-                df_load.rename(columns={df_load.columns[0]: 'Evaluator'}, inplace=True)
-            
-            # Match by both User and Proposal Title
-            match = df_load[(df_load['Evaluator'] == current_user) & (df_load['Proposal_Title'] == selected_proposal)]
-            if not match.empty:
-                existing_data = match.iloc[0]
-        except Exception as e:
-            st.error(f"Error reading data: {e}")
+    query = "SELECT * FROM scores WHERE evaluator = :ev AND proposal_title = :prop LIMIT 1;"
+    df_match = conn.query(query, params={"ev": current_user, "prop": selected_proposal}, ttl="0s")
+    
+    if not df_match.empty:
+        existing_data = df_match.iloc[0]
 
     if "is_editing" not in st.session_state:
         st.session_state.is_editing = False
@@ -60,7 +57,7 @@ if selected_proposal != "-- Select --":
     # --- VIEW MODE ---
     if existing_data is not None and not st.session_state.is_editing:
         st.success(f"✅ Record found for: {selected_proposal}")
-        st.metric("Your Total Score", f"{existing_data['Total']} / 5.0")
+        st.metric("Your Total Score", f"{existing_data['total']} / 5.0")
         if st.button("✏️ Edit Scores", use_container_width=True):
             st.session_state.is_editing = True
             st.rerun()
@@ -69,56 +66,71 @@ if selected_proposal != "-- Select --":
     else:
         with st.form("evaluation_form", clear_on_submit=True):
             st.info("ℹ️ **Flexible Scoring**: If a criterion is not applicable, you may leave it at 0.0.")
-            new_scores = []
+            new_scores = {}
             for name, weight in CRITERIA:
+                # SQL column names are usually lowercase. Adjust if your DB uses caps.
+                col_name = name.lower().replace(" ", "_")
                 d_val = float(existing_data[name]) if (existing_data is not None) else 0.0
                 val = st.number_input(f"{name} ({int(weight*100)}%)", 0.0, 5.0, d_val, 0.1)
-                new_scores.append(val)
+                new_scores[name] = val
             
-            d_comm = str(existing_data['Comments']) if (existing_data is not None) else ""
-            user_comments = st.text_area("Comments / Remarks", value=d_comm, placeholder="Enter any notes here...")
+            d_comm = str(existing_data['comments']) if (existing_data is not None) else ""
+            user_comments = st.text_area("Comments / Remarks", value=d_comm)
             
-            d_recom = existing_data['Recommendation'] if (existing_data is not None) else "Approve"
+            d_recom = existing_data['recommendation'] if (existing_data is not None) else "Approve"
             recom = st.radio("Recommendation", ["Approve", "Revise", "Reject"], 
                              index=["Approve", "Revise", "Reject"].index(d_recom), horizontal=True)
             
             if st.form_submit_button("📤 Submit Evaluation", use_container_width=True):
-                # --- CALCULATION LOGIC (Proportional Weighting) ---
+                # --- CALCULATION LOGIC ---
                 weighted_sum = 0
                 total_weight_used = 0
-                
-                for score, (name, weight) in zip(new_scores, CRITERIA):
+                for name, weight in CRITERIA:
+                    score = new_scores[name]
                     if score > 0: 
                         weighted_sum += (score * weight)
                         total_weight_used += weight
                 
-                # If everything is 0, total is 0. Otherwise, normalize based on used weights.
                 final_total = round(weighted_sum / total_weight_used, 2) if total_weight_used > 0 else 0.0
+                ts = datetime.now()
 
-                ts = datetime.now().strftime("%d-%m-%Y %I:%M %p")
-                final_row = [current_user, selected_proposal] + new_scores + [final_total, recom, user_comments, ts]
-                cols = ['Evaluator', 'Proposal_Title'] + [c[0] for c in CRITERIA] + ['Total', 'Recommendation', 'Comments', 'Last_Updated']
-                
-                # --- ROBUST SAVE LOGIC ---
-                if os.path.exists(DATA_FILE):
-                    df_save = pd.read_csv(DATA_FILE)
-                    
-                    # Fix missing 'Evaluator' header if necessary
-                    if 'Evaluator' not in df_save.columns:
-                        df_save.rename(columns={df_save.columns[0]: 'Evaluator'}, inplace=True)
-                    
-                    # Remove old entry to prevent duplicates
-                    mask = ~((df_save['Evaluator'] == current_user) & (df_save['Proposal_Title'] == selected_proposal))
-                    df_save = df_save[mask]
-                    
-                    new_df = pd.concat([df_save, pd.DataFrame([final_row], columns=cols)], ignore_index=True)
-                else:
-                    new_df = pd.DataFrame([final_row], columns=cols)
-                
-                new_df.to_csv(DATA_FILE, index=False)
+                # --- SQL SAVE (UPSERT) ---
+                # This uses "ON CONFLICT" to update the score if it already exists
+                with conn.session as s:
+                    sql = """
+                        INSERT INTO scores (
+                            evaluator, proposal_title, 
+                            strategic_alignment, potential_impact, feasibility, 
+                            budget_justification, timeline_readiness, execution_strategy,
+                            total, recommendation, comments, last_updated
+                        ) VALUES (
+                            :ev, :prop, :s1, :s2, :s3, :s4, :s5, :s6, :tot, :rec, :comm, :ts
+                        )
+                        ON CONFLICT (evaluator, proposal_title) 
+                        DO UPDATE SET 
+                            strategic_alignment = EXCLUDED.strategic_alignment,
+                            potential_impact = EXCLUDED.potential_impact,
+                            feasibility = EXCLUDED.feasibility,
+                            budget_justification = EXCLUDED.budget_justification,
+                            timeline_readiness = EXCLUDED.timeline_readiness,
+                            execution_strategy = EXCLUDED.execution_strategy,
+                            total = EXCLUDED.total,
+                            recommendation = EXCLUDED.recommendation,
+                            comments = EXCLUDED.comments,
+                            last_updated = EXCLUDED.last_updated;
+                    """
+                    params = {
+                        "ev": current_user, "prop": selected_proposal,
+                        "s1": new_scores['Strategic Alignment'], "s2": new_scores['Potential Impact'],
+                        "s3": new_scores['Feasibility'], "s4": new_scores['Budget Justification'],
+                        "s5": new_scores['Timeline Readiness'], "s6": new_scores['Execution Strategy'],
+                        "tot": final_total, "rec": recom, "comm": user_comments, "ts": ts
+                    }
+                    s.execute(sql, params)
+                    s.commit()
+
                 st.session_state.is_editing = False
-                st.success("🎉 Submission Successful!")
+                st.success("🎉 Submission Saved to Database!")
                 st.rerun()
-
 else:
     st.info("Please select a proposal title to begin.")

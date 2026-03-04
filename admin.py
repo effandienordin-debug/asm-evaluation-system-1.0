@@ -86,10 +86,29 @@ def edit_evaluator_dialog(old_name):
 @st.dialog("🗑️ Confirm Delete")
 def confirm_delete_dialog(table, column, value):
     st.warning(f"Are you sure you want to delete '{value}'?")
+    st.info("This will also remove any associated photos and scores.")
+    
     if st.button("Yes, Delete permanently", type="primary"):
+        # 1. If we are deleting an evaluator, clean up their photo first
+        if table == "evaluators":
+            try:
+                file_path = f"{value.strip().replace(' ', '_')}.png"
+                # Remove the file from Supabase Storage
+                supabase.storage.from_(BUCKET_NAME).remove([file_path])
+                st.toast(f"🗑️ Photo for {value} deleted.")
+            except Exception as e:
+                # We use a silent log here because sometimes a user might not have a photo
+                print(f"Storage cleanup skip/fail: {e}")
+
+        # 2. Delete from the Database
         with conn.session as s:
+            # CASCADE will handle scores if your foreign keys are set up, 
+            # otherwise, this line removes the main record.
             s.execute(text(f"DELETE FROM {table} WHERE {column} = :val"), {"val": value})
             s.commit()
+            
+        st.success(f"Successfully deleted {value}")
+        time.sleep(1)
         st.rerun()
 
 # --- 4. HELPER FUNCTIONS ---
@@ -256,6 +275,7 @@ if st.button("🆕 Archive & Reset Dashboard", type="primary", use_container_wid
         st.rerun()
     except Exception as e:
         st.error(f"Archive failed: {e}")
+
 
 
 

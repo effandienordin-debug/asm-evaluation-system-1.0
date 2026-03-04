@@ -249,10 +249,10 @@ else:
     st.info("💡 Click a row in the table below to edit that proposal.")
     
     if not scored_df.empty:
-        # Prepare display copy
+        # 1. Prepare display copy
         summary_display = scored_df.copy()
         
-        # Define Rename Map
+        # 2. Rename columns
         rename_dict = {
             "proposal_title": "Proposal Name", 
             "total": "Score", 
@@ -261,29 +261,26 @@ else:
         }
         summary_display = summary_display.rename(columns=rename_dict)
         
-        # Apply Styling to raw numeric 'Score' column before formatting to string
-        # This creates a background gradient (light green to dark green)
+        # 3. Create the Styled Object
+        # We handle the "0/0" formatting AND the colors here
         styled_df = summary_display.style.background_gradient(
             cmap="Greens", subset=["Score"], vmin=0, vmax=5
-        ).format({"Score": "{:.1f} / 5.0"})
+        ).format({
+            "Score": "{:.1f} / 5.0"
+        })
 
+        # 4. Display without redundant column_config that causes TypeErrors
         st.dataframe(
             styled_df, 
             use_container_width=True, 
             hide_index=True, 
             on_select="rerun", 
             selection_mode="single-row", 
-            key="summary_table",
-            column_config={
-                "Remarks": st.column_config.TextColumn(
-                    width="large", 
-                    wrap_text=True
-                ),
-                "Proposal Name": st.column_config.TextColumn(width="medium"),
-                "Score": st.column_config.TextColumn(width="small"),
-                "Recommendation": st.column_config.TextColumn(width="small"),
-            }
+            key="summary_table"
         )
+        
+        # Note: If you still need wrapping, we apply it via global layout or 
+        # a simpler column_config if the version allows.
     else:
         st.info("No proposals evaluated yet.")
 
@@ -308,3 +305,4 @@ else:
     else:
         st.divider()
         st.info(f"💡 Complete the **{len(remaining)}** remaining proposal(s) to finalize.")
+

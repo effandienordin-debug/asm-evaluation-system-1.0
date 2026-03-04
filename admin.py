@@ -149,18 +149,21 @@ with tab2:
     with st.form("eval_add_form", clear_on_submit=True):
         e_name_in = st.text_input("Evaluator Name")
         e_photo_in = st.file_uploader("Photo", type=['png', 'jpg', 'jpeg'])
+        
+        # Line 152: The "if" statement
         if st.form_submit_button("Add Evaluator"):
-    if e_name_in:
-        add_item_sql("evaluators", "name", e_name_in)
-        if e_photo_in:
-            file_path = f"{e_name_in.strip().replace(' ', '_')}.png"
-            supabase.storage.from_(BUCKET_NAME).upload(
-                path=file_path, file=e_photo_in.getvalue(),
-                file_options={"content-type": "image/png", "x-upsert": "true"}
-            )
-        st.toast(f"✅ Evaluator '{e_name_in}' added!") # The Pop-up
-        time.sleep(1)
-        st.rerun()
+            # Line 153 and below MUST be indented further right
+            if e_name_in:
+                add_item_sql("evaluators", "name", e_name_in)
+                if e_photo_in:
+                    file_path = f"{e_name_in.strip().replace(' ', '_')}.png"
+                    supabase.storage.from_(BUCKET_NAME).upload(
+                        path=file_path, file=e_photo_in.getvalue(),
+                        file_options={"content-type": "image/png", "x-upsert": "true"}
+                    )
+                st.toast(f"✅ Evaluator '{e_name_in}' added!")
+                time.sleep(1)
+                st.rerun()
 
     evals = get_items_sql("evaluators", "name")
     with st.expander(f"🔍 View/Edit Evaluators ({len(evals)})"):
@@ -244,6 +247,7 @@ if st.button("🆕 Archive & Reset Dashboard", type="primary", use_container_wid
         st.rerun()
     except Exception as e:
         st.error(f"Archive failed: {e}")
+
 
 
 

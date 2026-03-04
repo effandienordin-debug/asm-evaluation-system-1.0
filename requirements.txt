@@ -6,4 +6,5 @@ psycopg2-binary
 supabase
 streamlit-autorefresh
 qrcode[pil]
+matplotlib
 

@@ -57,7 +57,6 @@ def edit_evaluator_dialog(old_name):
     
     if st.button("Save Changes", type="primary"):
         clean_new_name = new_name.strip()
-        
         with conn.session as s:
             s.execute(text("UPDATE evaluators SET name = :new WHERE name = :old"), 
                       {"new": clean_new_name, "old": old_name})
@@ -84,22 +83,17 @@ def edit_evaluator_dialog(old_name):
 @st.dialog("🗑️ Confirm Delete")
 def confirm_delete_dialog(table, column, value):
     st.warning(f"Are you sure you want to delete '{value}'?")
-    st.info("This will also remove any associated photos and scores.")
-    
     if st.button("Yes, Delete permanently", type="primary"):
         if table == "evaluators":
             try:
                 file_path = f"{value.strip().replace(' ', '_')}.png"
                 supabase.storage.from_(BUCKET_NAME).remove([file_path])
-                st.toast(f"🗑️ Photo for {value} deleted.")
-            except Exception as e:
-                print(f"Storage cleanup skip/fail: {e}")
+            except: pass
 
         with conn.session as s:
             s.execute(text(f"DELETE FROM {table} WHERE {column} = :val"), {"val": value})
             s.commit()
-            
-        st.success(f"Successfully deleted {value}")
+        st.success(f"Deleted {value}")
         time.sleep(1)
         st.rerun()
 
@@ -126,7 +120,8 @@ with col_ref2:
 if auto_refresh:
     st_autorefresh(interval=15000, key="admin_refresh")
 
-tab1, tab2, tab3 = st.tabs(["📋 Proposals", "👤 Evaluators", "🔗 Links"])
+# --- UPDATED TABS ---
+tab1, tab2, tab3, tab4 = st.tabs(["📋 Proposals", "👤 Evaluators", "🔗 Links", "📜 History"])
 
 with tab1:
     st.subheader("Manage Proposals")
@@ -136,17 +131,14 @@ with tab1:
         if st.button("Add Proposal"):
             if p_name: 
                 add_item_sql("proposals", "title", p_name)
-                st.toast(f"✅ Proposal '{p_name}' added!")
+                st.toast(f"✅ Added '{p_name}'")
                 time.sleep(1)
                 st.rerun()
     else:
         bulk_p = st.text_area("Paste (one per line)")
         if st.button("Bulk Add"):
             for item in bulk_p.split('\n'):
-                if item.strip(): 
-                    add_item_sql("proposals", "title", item)
-            st.toast("✅ Bulk proposals added!")
-            time.sleep(1)
+                if item.strip(): add_item_sql("proposals", "title", item)
             st.rerun()
 
     props = get_items_sql("proposals", "title")
@@ -163,28 +155,21 @@ with tab2:
     with st.form("eval_add_form", clear_on_submit=True):
         e_name_in = st.text_input("Evaluator Name")
         e_photo_in = st.file_uploader("Photo", type=['png', 'jpg', 'jpeg'])
-        
         if st.form_submit_button("Add Evaluator"):
             if e_name_in:
                 clean_name = e_name_in.strip()
                 add_item_sql("evaluators", "name", clean_name)
-                
                 if e_photo_in:
                     file_path = f"{clean_name.replace(' ', '_')}.png"
                     supabase.storage.from_(BUCKET_NAME).upload(
-                        path=file_path, 
-                        file=e_photo_in.getvalue(),
+                        path=file_path, file=e_photo_in.getvalue(),
                         file_options={"content-type": "image/png", "x-upsert": "true"}
                     )
-                
-                st.toast(f"✅ {clean_name} added to the system!")
-                time.sleep(1)
                 st.rerun()
 
     evals = get_items_sql("evaluators", "name")
     with st.expander(f"🔍 View/Edit Evaluators ({len(evals)})"):
-        search_e = st.text_input("Filter Evaluators...")
-        for e in [x for x in evals if search_e.lower() in x.lower()]:
+        for e in evals:
             c1, c2, c3, c4 = st.columns([1, 4, 1, 1])
             img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
             c1.image(img_url, width=40)
@@ -201,6 +186,34 @@ with tab3:
         st.dataframe(pd.DataFrame(link_data), use_container_width=True, hide_index=True)
         copy_block = "\n".join([f"👤 {d['Evaluator']}: {d['Link']}" for d in link_data])
         st.text_area("Copy-Paste Block", value=copy_block, height=150)
+
+# --- TAB 4: HISTORY (Integrated here) ---
+with tab4:
+    st.subheader("📜 Historical Evaluation Data")
+    try:
+        df_history = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
+    except:
+        with conn.session as s:
+            s.execute(text("CREATE TABLE IF NOT EXISTS scores_history AS SELECT *, NOW() as archive_timestamp FROM scores WHERE 1=0;"))
+            s.commit()
+        df_history = pd.DataFrame()
+
+    if not df_history.empty:
+        col_dl, _ = st.columns([1, 3])
+        with col_dl:
+            csv = df_history.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Download CSV", data=csv, file_name=f"asm_history_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv", use_container_width=True)
+        
+        st.dataframe(df_history, use_container_width=True)
+        
+        with st.expander("⚠️ Danger Zone"):
+            if st.button("🔥 Wipe Archive Permanently"):
+                with conn.session as s:
+                    s.execute(text("TRUNCATE TABLE scores_history;"))
+                    s.commit()
+                st.rerun()
+    else:
+        st.info("No archived sessions found.")
 
 # --- 6. TRACKER & SUMMARY ---
 st.divider()
@@ -230,59 +243,19 @@ if evals_all:
         is_done = name in unique_submitted
         bg = "#E6FFFA" if is_done else "#F8F9FA"
         img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{name.replace(' ', '_')}.png?t={cache_buster}"
-        
         with cols[i % 4]:
             st.markdown(f"""
                 <div class="eval-card" style="background-color:{bg};">
-                    <img src="{img_url}" style="width:50px; height:50px; border-radius:50%; object-fit:cover;" 
-                    onerror="this.src='https://ui-avatars.com/api/?name={name}'">
+                    <img src="{img_url}" style="width:50px; height:50px; border-radius:50%; object-fit:cover;" onerror="this.src='https://ui-avatars.com/api/?name={name}'">
                     <p style="font-size:0.85em; font-weight:bold; margin:0; color:#000;">{name}</p>
                     <p style="font-size:0.8em; margin:0; color:#666;">{'✅ DONE' if is_done else '⌛ WAITING'}</p>
                 </div>
             """, unsafe_allow_html=True)
 
-# --- 7. SESSION CONTROL (Archive & Reset) ---
+# --- 7. SESSION CONTROL ---
 st.divider()
 st.header("🚀 Session Control")
 
-# 1. Fetch History (with automatic table check)
-try:
-    df_history = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
-except Exception:
-    # If the table doesn't exist, create it via SQL
-    with conn.session as s:
-        s.execute(text("""
-            CREATE TABLE IF NOT EXISTS scores_history AS 
-            SELECT *, NOW() as archive_timestamp FROM scores WHERE 1=0;
-        """))
-        s.commit()
-    df_history = pd.DataFrame()
-
-with st.expander(f"📚 View Archived Sessions ({len(df_history)})"):
-    if not df_history.empty:
-        # Download Button logic inside the expander
-        csv = df_history.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Download History as CSV",
-            data=csv,
-            file_name=f"asm_archive_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-        )
-        st.dataframe(df_history, use_container_width=True)
-        
-        # Clear History Option
-        if st.checkbox("Show Danger Zone"):
-            if st.button("🔥 Wipe Archive Permanently", type="secondary"):
-                with conn.session as s:
-                    s.execute(text("TRUNCATE TABLE scores_history;"))
-                    s.commit()
-                st.warning("Archive cleared.")
-                time.sleep(1)
-                st.rerun()
-    else:
-        st.info("No archived sessions found.")
-
-# 2. Archive Action
 force_mode = st.toggle("⚠️ Enable Force Archive")
 can_archive = (len(unique_submitted) >= len(evals_all) and len(evals_all) > 0) or force_mode
 
@@ -292,9 +265,7 @@ if st.button("🆕 Archive & Reset Dashboard", type="primary", use_container_wid
             s.execute(text("INSERT INTO scores_history SELECT *, NOW() as archive_timestamp FROM scores;"))
             s.execute(text("TRUNCATE TABLE scores RESTART IDENTITY CASCADE;"))
             s.commit()
-        
         st.balloons()
-        st.success("Current session has been moved to history!")
         time.sleep(2)
         st.rerun()
     except Exception as e:

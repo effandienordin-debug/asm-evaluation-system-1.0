@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import time
+import re
 from datetime import datetime
 from sqlalchemy import text
 from streamlit_autorefresh import st_autorefresh
@@ -15,7 +16,8 @@ CRITERIA = [
     ('Timeline Readiness', 0.10), ('Execution Strategy', 0.15)
 ]
 
-st.set_page_config(page_title="ASM Evaluator Entry", layout="centered")
+# Set to wide to accommodate the new "Combined With" column
+st.set_page_config(page_title="ASM Evaluator Entry", layout="wide")
 
 # --- 2. DATABASE CONNECTION ---
 conn = st.connection("postgresql", type="sql")
@@ -125,6 +127,16 @@ with col_txt:
 try:
     scored_df = conn.query("SELECT proposal_title, total, recommendation, comments FROM scores WHERE evaluator = :ev", params={"ev": current_user}, ttl=0)
     completed_proposals = scored_df['proposal_title'].tolist() if not scored_df.empty else []
+    
+    # Extract Merge Target from comments
+    def extract_merge_target(comment):
+        if pd.isna(comment): return ""
+        match = re.search(r"\[MERGE WITH: (.*?)\]", str(comment))
+        return match.group(1) if match else ""
+
+    if not scored_df.empty:
+        scored_df['merge_target'] = scored_df['comments'].apply(extract_merge_target)
+        scored_df['display_comments'] = scored_df['comments'].str.replace(r"\[MERGE WITH:.*?\] ", "", regex=True)
 except:
     scored_df = pd.DataFrame()
     completed_proposals = []
@@ -181,20 +193,16 @@ if selected_proposal != "-- Select --":
             for name, weight in CRITERIA:
                 col_db = name.lower().replace(" ", "_")
                 default_val = float(existing_data[col_db]) if existing_data is not None else 0.0
-                saved_val = st.session_state.get(f"{draft_key}_{col_db}", default_val)
-                inputs[name] = st.number_input(f"{name} ({int(weight*100)}%)", 0.0, 5.0, saved_val, 0.1)
+                inputs[name] = st.number_input(f"{name} ({int(weight*100)}%)", 0.0, 5.0, default_val, 0.1)
                 if inputs[name] > 0: criteria_met += 1
             
-            form_progress = criteria_met / len(CRITERIA)
             st.write(f"Criteria Completed: {criteria_met}/{len(CRITERIA)}")
-            st.progress(form_progress)
+            st.progress(criteria_met / len(CRITERIA))
 
-            default_comm = str(existing_data['comments']) if existing_data is not None else ""
-            if "[MERGE WITH:" in default_comm:
-                # Strip the previous merge tag for the text area so it doesn't duplicate
-                default_comm = default_comm.split("] ", 1)[-1]
-            
-            user_comments = st.text_area("Comments / Remarks", value=default_comm)
+            # Raw comment handling
+            raw_comm = str(existing_data['comments']) if existing_data is not None else ""
+            clean_comm = re.sub(r"\[MERGE WITH:.*?\] ", "", raw_comm)
+            user_comments = st.text_area("Comments / Remarks", value=clean_comm)
             
             recom_options = ["Pending", "Approve", "Revise", "Reject", "Combine/Merge"]
             current_rec = str(existing_data['recommendation']) if existing_data is not None else "Pending"
@@ -204,8 +212,13 @@ if selected_proposal != "-- Select --":
             
             merge_target = None
             if recom == "Combine/Merge":
+                existing_target = extract_merge_target(raw_comm)
                 other_proposals = [p for p in PROPOSALS if p != selected_proposal]
-                merge_target = st.selectbox("Combine with which proposal?", other_proposals)
+                try:
+                    target_idx = other_proposals.index(existing_target)
+                except:
+                    target_idx = 0
+                merge_target = st.selectbox("Combine with which proposal?", other_proposals, index=target_idx)
 
             col_sub, col_can = st.columns(2)
             with col_sub:
@@ -247,24 +260,29 @@ else:
     if not scored_df.empty:
         summary_display = scored_df.copy()
 
-        # Emoji logic for immediate visual identification
-        def get_status_icon(rec):
-            if rec == "Approve": return "🟢 Approve"
-            if rec == "Reject": return "🔴 Reject"
-            if rec == "Revise": return "🟡 Revise"
-            if rec == "Combine/Merge": return "🔵 MERGE"
-            return "⚪ Pending"
+        # Sort Logic: MERGE (1) -> Others
+        def get_status_info(rec):
+            if rec == "Combine/Merge": return "🔵 MERGE", 1
+            if rec == "Approve": return "🟢 Approve", 2
+            if rec == "Revise": return "🟡 Revise", 3
+            if rec == "Reject": return "🔴 Reject", 4
+            return "⚪ Pending", 5
 
-        summary_display["Status"] = summary_display["recommendation"].apply(get_status_icon)
+        status_data = summary_display["recommendation"].apply(get_status_info)
+        summary_display["Status"] = [x[0] for x in status_data]
+        summary_display["sort_priority"] = [x[1] for x in status_data]
         
         summary_display = summary_display.rename(columns={
             "proposal_title": "Proposal Name", 
             "total": "Score", 
-            "comments": "Remarks"
+            "merge_target": "Combined With",
+            "display_comments": "Remarks"
         })
 
-        # Reorder to highlight Status
-        display_cols = ["Status", "Proposal Name", "Score", "Remarks"]
+        # Sort and Drop helper
+        summary_display = summary_display.sort_values("sort_priority").drop(columns=["sort_priority"])
+
+        display_cols = ["Status", "Proposal Name", "Combined With", "Score", "Remarks"]
         summary_display = summary_display[display_cols]
 
         st.dataframe(
@@ -276,6 +294,7 @@ else:
             key="summary_table",
             column_config={
                 "Status": st.column_config.TextColumn(width="small"),
+                "Combined With": st.column_config.TextColumn(width="medium"),
                 "Score": st.column_config.ProgressColumn(
                     "Score",
                     format="%.1f",
@@ -291,7 +310,7 @@ else:
 
     remaining = [p for p in PROPOSALS if p not in completed_proposals]
     if remaining:
-        with st.expander("⏳ View Remaining Proposals"):
+        with st.expander(f"⏳ View Remaining Proposals ({len(remaining)})"):
             for p in remaining:
                 st.button(f"📝 Start: {p}", key=f"btn_{p}", use_container_width=True, on_click=nav_to_proposal, args=(p,))
 

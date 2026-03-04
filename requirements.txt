@@ -4,3 +4,4 @@ plotly
 sqlalchemy
 psycopg2-binary
 supabase
+streamlit-autorefresh

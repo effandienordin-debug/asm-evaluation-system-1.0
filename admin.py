@@ -207,11 +207,20 @@ elif menu_choice == "👤 Evaluators & Links":
     with col_links:
         st.subheader("Access Links")
         if evals_all:
-            base_url = st.text_input("Base URL", value="https://asm-evaluation-system-10-evaluation-form.streamlit.app").rstrip('/')
+            base_url = st.text_input("Base URL", value="https://your-app.streamlit.app").rstrip('/')
+            
+            # 1. Prepare Data
             link_data = [{"Name": n, "Link": f"{base_url}/?user={i}"} for i, n in enumerate(evals_all)]
-            st.dataframe(pd.DataFrame(link_data), hide_index=True)
+            df_links = pd.DataFrame(link_data)
+
+            # 2. Display as Table
+            st.table(df_links)
+            
+            # 3. Copy-Paste Utility
             if st.button("📋 Show Links for Copying"):
                 st.code("\n".join([f"{d['Name']}: {d['Link']}" for d in link_data]))
+        else:
+            st.info("Add evaluators to generate links.")
 
     st.divider()
     st.subheader("Manage Existing Evaluators")
@@ -246,4 +255,5 @@ elif menu_choice == "📜 History":
                 st.rerun()
     else:
         st.info("No data in archive.")
+
 

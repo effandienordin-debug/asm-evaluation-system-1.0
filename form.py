@@ -47,9 +47,15 @@ except:
 st_autorefresh(interval=60000, key="form_stay_alive") 
 
 # --- 6. HEADER WITH PHOTO ---
+# 1. Create a unique timestamp to force the browser to refresh the image
+cache_buster = int(datetime.now().timestamp())
+
 col_img, col_txt = st.columns([1, 4])
 with col_img:
-    img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{current_user.replace(' ', '_')}.png"
+    # 2. Add ?t={cache_buster} to the end of the URL
+    clean_name = current_user.replace(' ', '_')
+    img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{clean_name}.png?t={cache_buster}"
+    
     st.markdown(f"""
         <img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; border: 2px solid #E2E8F0;" 
         onerror="this.src='https://ui-avatars.com/api/?name={current_user}&background=random&size=128'">
@@ -145,4 +151,5 @@ if selected_proposal != "-- Select --":
                 st.rerun()
 else:
     st.info("Please select a proposal title to begin.")
+
 

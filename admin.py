@@ -1,6 +1,9 @@
 import streamlit as st
+import pd
 import pandas as pd
 import time
+import qrcode
+from io import BytesIO
 from datetime import datetime
 from sqlalchemy import text
 from supabase import create_client
@@ -31,7 +34,6 @@ st.markdown("""
         padding:15px; border-radius:10px; border: 1px solid #E2E8F0; 
         text-align:center; margin-bottom:10px; min-height: 120px;
     }
-    /* Style the sidebar radio buttons to look more like a menu */
     div[data-testid="stSidebarUserContent"] .stRadio > div {
         gap: 10px;
     }
@@ -97,7 +99,6 @@ with st.sidebar:
     st.title("🛡️ ASM Admin")
     st.divider()
     
-    # Auto Refresh Toggle
     auto_refresh = st.toggle("🔄 Auto Refresh (15s)", value=False)
     if auto_refresh: st_autorefresh(interval=15000, key="admin_refresh")
     
@@ -111,7 +112,6 @@ with st.sidebar:
     st.sidebar.markdown("---")
     st.sidebar.subheader("🚀 Session Control")
     
-    # Pre-fetching data for session logic
     try:
         df_current = conn.query("SELECT evaluator FROM scores;", ttl=0)
     except: df_current = pd.DataFrame()
@@ -132,7 +132,6 @@ with st.sidebar:
 
 # --- 6. MAIN CONTENT AREA ---
 
-# --- TRACKER ---
 if menu_choice == "📊 Tracker":
     st.header("📊 Live Performance Metrics")
     try:
@@ -164,7 +163,6 @@ if menu_choice == "📊 Tracker":
                     <p style="font-size:0.8em; color:#666;">{'✅ DONE' if is_done else '⌛ WAITING'}</p>
                 </div>""", unsafe_allow_html=True)
 
-# --- PROPOSALS ---
 elif menu_choice == "📋 Proposals":
     st.header("📋 Manage Proposals")
     p_name = st.text_input("Add Proposal Title")
@@ -186,7 +184,6 @@ elif menu_choice == "📋 Proposals":
         if c2.button("✏️", key=f"edit_p_{p}"): edit_proposal_dialog(p)
         if c3.button("🗑️", key=f"del_p_{p}"): confirm_delete_dialog("proposals", "title", p)
 
-# --- EVALUATORS & LINKS ---
 elif menu_choice == "👤 Evaluators & Links":
     st.header("👤 Evaluators & Access Links")
     col_add, col_links = st.columns([1, 1])
@@ -208,17 +205,32 @@ elif menu_choice == "👤 Evaluators & Links":
         st.subheader("Access Links")
         if evals_all:
             base_url = st.text_input("Base URL", value="https://your-app.streamlit.app").rstrip('/')
-            
-            # 1. Prepare Data
             link_data = [{"Name": n, "Link": f"{base_url}/?user={i}"} for i, n in enumerate(evals_all)]
-            df_links = pd.DataFrame(link_data)
-
-            # 2. Display as Table
-            st.table(df_links)
+            st.table(pd.DataFrame(link_data))
             
-            # 3. Copy-Paste Utility
+            # --- QR CODE LOGIC ---
+            if st.button("🖼️ Generate QR Codes"):
+                qr_cols = st.columns(3)
+                for idx, d in enumerate(link_data):
+                    qr = qrcode.QRCode(version=1, box_size=10, border=4)
+                    qr.add_data(d['Link'])
+                    qr.make(fit=True)
+                    img = qr.make_image(fill_color="black", back_color="white")
+                    buf = BytesIO()
+                    img.save(buf, format="PNG")
+                    with qr_cols[idx % 3]:
+                        st.image(buf.getvalue(), caption=d['Name'], use_container_width=True)
+
+            # --- SEPARATED COPY LOGIC ---
             if st.button("📋 Show Links for Copying"):
-                st.code("\n".join([f"{d['Name']}: {d['Link']}" for d in link_data]))
+                st.info("Columns are separated. Copy the column you need.")
+                c_n, c_l = st.columns(2)
+                with c_n:
+                    st.caption("Names")
+                    st.code("\n".join([d['Name'] for d in link_data]))
+                with c_l:
+                    st.caption("Clean Links (Copy these)")
+                    st.code("\n".join([d['Link'] for d in link_data]))
         else:
             st.info("Add evaluators to generate links.")
 
@@ -232,7 +244,6 @@ elif menu_choice == "👤 Evaluators & Links":
         if c3.button("✏️", key=f"edit_e_{e}"): edit_evaluator_dialog(e)
         if c4.button("🗑️", key=f"del_e_{e}"): confirm_delete_dialog("evaluators", "name", e)
 
-# --- HISTORY ---
 elif menu_choice == "📜 History":
     st.header("📜 Historical Sessions")
     try:
@@ -255,5 +266,3 @@ elif menu_choice == "📜 History":
                 st.rerun()
     else:
         st.info("No data in archive.")
-
-

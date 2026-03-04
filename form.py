@@ -1,4 +1,4 @@
--import streamlit as st
+import streamlit as st
 import pandas as pd
 import time
 from datetime import datetime
@@ -218,3 +218,4 @@ else:
     else:
         st.divider()
         st.info(f"💡 Complete the **{len(remaining)}** remaining proposal(s) to finalize.")
+

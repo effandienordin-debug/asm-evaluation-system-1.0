@@ -119,16 +119,19 @@ with tab1:
     if mode_p == "Single":
         p_name = st.text_input("Proposal Title")
         if st.button("Add Proposal"):
-    if p_name: 
-        add_item_sql("proposals", "title", p_name)
-        st.toast(f"✅ Proposal '{p_name}' added successfully!") # The Pop-up
-        time.sleep(1)
-        st.rerun()
+            if p_name: 
+                add_item_sql("proposals", "title", p_name)
+                st.toast(f"✅ Proposal '{p_name}' added!") # The pop-up
+                time.sleep(1)
+                st.rerun()
     else:
         bulk_p = st.text_area("Paste (one per line)")
         if st.button("Bulk Add"):
             for item in bulk_p.split('\n'):
-                if item.strip(): add_item_sql("proposals", "title", item)
+                if item.strip(): 
+                    add_item_sql("proposals", "title", item)
+            st.toast("✅ Bulk proposals added!")
+            time.sleep(1)
             st.rerun()
 
     props = get_items_sql("proposals", "title")
@@ -241,6 +244,7 @@ if st.button("🆕 Archive & Reset Dashboard", type="primary", use_container_wid
         st.rerun()
     except Exception as e:
         st.error(f"Archive failed: {e}")
+
 
 
 

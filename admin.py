@@ -53,14 +53,26 @@ def edit_proposal_dialog(old_val):
 @st.dialog("✏️ Edit Evaluator")
 def edit_evaluator_dialog(old_name):
     new_name = st.text_input("Edit Evaluator Name", value=old_name)
-    if st.button("Update Name", type="primary"):
+    new_photo = st.file_uploader("Update Photo (Optional)", type=['png', 'jpg', 'jpeg'])
+    
+    if st.button("Save Changes", type="primary"):
         with conn.session as s:
+            # 1. Update database names
             s.execute(text("UPDATE evaluators SET name = :new WHERE name = :old"), 
                       {"new": new_name.strip(), "old": old_name})
             s.execute(text("UPDATE scores SET evaluator = :new WHERE evaluator = :old"), 
                       {"new": new_name.strip(), "old": old_name})
             s.commit()
-        st.success("Evaluator updated!")
+        
+        # 2. Update Photo if a new one was uploaded
+        if new_photo:
+            file_path = f"{new_name.strip().replace(' ', '_')}.png"
+            supabase.storage.from_(BUCKET_NAME).upload(
+                path=file_path, file=new_photo.getvalue(),
+                file_options={"content-type": "image/png", "x-upsert": "true"}
+            )
+        
+        st.success(f"Updated {new_name}!")
         time.sleep(1)
         st.rerun()
 
@@ -107,9 +119,11 @@ with tab1:
     if mode_p == "Single":
         p_name = st.text_input("Proposal Title")
         if st.button("Add Proposal"):
-            if p_name: 
-                add_item_sql("proposals", "title", p_name)
-                st.rerun()
+    if p_name: 
+        add_item_sql("proposals", "title", p_name)
+        st.toast(f"✅ Proposal '{p_name}' added successfully!") # The Pop-up
+        time.sleep(1)
+        st.rerun()
     else:
         bulk_p = st.text_area("Paste (one per line)")
         if st.button("Bulk Add"):
@@ -133,15 +147,17 @@ with tab2:
         e_name_in = st.text_input("Evaluator Name")
         e_photo_in = st.file_uploader("Photo", type=['png', 'jpg', 'jpeg'])
         if st.form_submit_button("Add Evaluator"):
-            if e_name_in:
-                add_item_sql("evaluators", "name", e_name_in)
-                if e_photo_in:
-                    file_path = f"{e_name_in.strip().replace(' ', '_')}.png"
-                    supabase.storage.from_(BUCKET_NAME).upload(
-                        path=file_path, file=e_photo_in.getvalue(),
-                        file_options={"content-type": "image/png", "x-upsert": "true"}
-                    )
-                st.rerun()
+    if e_name_in:
+        add_item_sql("evaluators", "name", e_name_in)
+        if e_photo_in:
+            file_path = f"{e_name_in.strip().replace(' ', '_')}.png"
+            supabase.storage.from_(BUCKET_NAME).upload(
+                path=file_path, file=e_photo_in.getvalue(),
+                file_options={"content-type": "image/png", "x-upsert": "true"}
+            )
+        st.toast(f"✅ Evaluator '{e_name_in}' added!") # The Pop-up
+        time.sleep(1)
+        st.rerun()
 
     evals = get_items_sql("evaluators", "name")
     with st.expander(f"🔍 View/Edit Evaluators ({len(evals)})"):
@@ -225,5 +241,6 @@ if st.button("🆕 Archive & Reset Dashboard", type="primary", use_container_wid
         st.rerun()
     except Exception as e:
         st.error(f"Archive failed: {e}")
+
 
 

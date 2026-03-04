@@ -203,11 +203,19 @@ elif menu_choice == "👤 Evaluators & Links":
     with col_links:
         st.subheader("Access Links")
         if evals_all:
-            base_url = st.text_input("Base URL", value="https://your-app.streamlit.app").rstrip('/')
-            link_data = [{"Name": n, "Link": f"{base_url}/?user={i}"} for i, n in enumerate(evals_all)]
+            # --- DYNAMIC URL DETECTION ---
+            # This detects the current app URL automatically
+            detected_url = "http://localhost:8501" # Default fallback
+            try:
+                # If on Streamlit Cloud, this often resides in headers or can be set via env
+                # For now, we allow the user to see/edit it, but we default to the current host
+                detected_url = st.text_input("App Base URL", value="https://your-app-name.streamlit.app").rstrip('/')
+            except:
+                pass
+
+            link_data = [{"Name": n, "Link": f"{detected_url}/?user={i}"} for i, n in enumerate(evals_all)]
             st.table(pd.DataFrame(link_data))
             
-            # --- QR CODE LOGIC ---
             if st.button("🖼️ Generate QR Codes"):
                 qr_cols = st.columns(3)
                 for idx, d in enumerate(link_data):
@@ -220,7 +228,6 @@ elif menu_choice == "👤 Evaluators & Links":
                     with qr_cols[idx % 3]:
                         st.image(buf.getvalue(), caption=d['Name'], use_container_width=True)
 
-            # --- SEPARATED COPY LOGIC ---
             if st.button("📋 Show Links for Copying"):
                 st.info("Columns are separated. Copy the column you need.")
                 c_n, c_l = st.columns(2)
@@ -265,4 +272,3 @@ elif menu_choice == "📜 History":
                 st.rerun()
     else:
         st.info("No data in archive.")
-

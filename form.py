@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import time
 from datetime import datetime
 from sqlalchemy import text
 from streamlit_autorefresh import st_autorefresh
@@ -19,16 +20,14 @@ st.set_page_config(page_title="ASM Evaluator Entry", layout="centered")
 # --- 2. DATABASE CONNECTION ---
 conn = st.connection("postgresql", type="sql")
 
-# --- 3. LOGIN LOGIC (DATABASE-DRIVEN) ---
+# --- 3. LOGIN LOGIC ---
 def check_password():
     def password_entered():
-        # Fetch the password from the SETTINGS table instead of Secrets
         try:
             pass_df = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
             db_password = pass_df.iloc[0]['value'] if not pass_df.empty else None
         except:
             db_password = None
-            st.error("Database Error: Could not retrieve access settings.")
         
         if st.session_state["password"] == db_password:
             st.session_state["password_correct"] = True
@@ -50,41 +49,7 @@ def check_password():
 if not check_password():
     st.stop()
 
-# ... (Helper functions and identification logic remain the same) ...
-
-# --- ONE-TIME SUBMISSION CHECK ---
-try:
-    status_query = "SELECT has_submitted FROM evaluators WHERE name = :name LIMIT 1;"
-    df_status = conn.query(status_query, params={"name": current_user}, ttl=0)
-    if not df_status.empty and df_status.iloc[0]['has_submitted']:
-        st.warning(f"Hello {current_user}, your evaluation session has already been completed and locked.")
-        st.info("Please contact the Administrator if you need to revise your entries.")
-        st.stop()
-except:
-    pass 
-
-# ... (Header and Proposal selection logic remain the same) ...
-
-if selected_proposal != "-- Select --":
-    # ... (Your existing form logic for individual proposals) ...
-else:
-    st.info("Please select a proposal title to begin.")
-    
-    # --- 9. FINAL LOCKOUT BUTTON ---
-    # This allows the user to finish their whole session and trigger the "has_submitted" lock
-    st.divider()
-    st.subheader("🏁 Finish Evaluation")
-    st.write("Once you have submitted scores for all proposals, click below to lock your session.")
-    
-    if st.button("Finalize and Close Session", type="secondary", use_container_width=True):
-        with conn.session as s:
-            s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
-            s.commit()
-        st.success("Session Locked. Thank you!")
-        time.sleep(2)
-        st.rerun()
-
-# --- 4. HELPER FUNCTIONS ---
+# --- 4. DATA FETCHING ---
 def get_cloud_list(table, column):
     try:
         df = conn.query(f"SELECT {column} FROM {table} ORDER BY {column} ASC;", ttl=0)
@@ -92,63 +57,49 @@ def get_cloud_list(table, column):
     except:
         return []
 
-# --- 5. AUTO-REFRESH ---
 st_autorefresh(interval=30000, key="evaluator_heartbeat")
-
 EVALUATORS = get_cloud_list("evaluators", "name")
 PROPOSALS = get_cloud_list("proposals", "title")
 
-# --- 6. USER IDENTIFICATION & SUBMISSION CHECK ---
+# --- 5. USER IDENTIFICATION ---
 user_param = st.query_params.get("user")
-
 if user_param is None or not EVALUATORS:
     st.warning("⚠️ Access Denied. Please use your personalized link.")
     st.stop()
 
-# Support both Index IDs and Nicknames
 current_user = None
 if user_param.isdigit():
     idx = int(user_param)
-    if idx < len(EVALUATORS):
-        current_user = EVALUATORS[idx]
+    if idx < len(EVALUATORS): current_user = EVALUATORS[idx]
 else:
-    if user_param in EVALUATORS:
-        current_user = user_param
+    if user_param in EVALUATORS: current_user = user_param
 
 if not current_user:
     st.error("Invalid User Identification.")
     st.stop()
 
-# --- ONE-TIME SUBMISSION CHECK ---
-# We check if the user has a "submitted" flag in the evaluators table
+# --- 6. SUBMISSION LOCK CHECK ---
 try:
-    status_query = "SELECT has_submitted FROM evaluators WHERE name = :name LIMIT 1;"
-    df_status = conn.query(status_query, params={"name": current_user}, ttl=0)
-    if not df_status.empty and df_status.iloc[0]['has_submitted']:
-        st.warning(f"Hello {current_user}, your evaluation session has already been completed and locked.")
-        st.info("Please contact the Administrator if you need to revise your entries.")
+    status_df = conn.query("SELECT has_submitted FROM evaluators WHERE name = :name LIMIT 1;", params={"name": current_user}, ttl=0)
+    if not status_df.empty and status_df.iloc[0]['has_submitted']:
+        st.warning(f"Hello {current_user}, your session is completed and locked.")
+        st.info("Contact the Administrator if you need to revise your entries.")
         st.stop()
 except:
-    pass # Column might not exist yet
+    pass
 
-# --- 7. HEADER WITH PHOTO ---
+# --- 7. HEADER ---
 cache_buster = int(datetime.now().timestamp())
 col_img, col_txt = st.columns([1, 4])
 with col_img:
     clean_name = current_user.replace(' ', '_')
     img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{clean_name}.png?t={cache_buster}"
-    st.markdown(f"""
-        <div style="text-align: center;">
-            <img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; border: 3px solid #1E3A8A;" 
-            onerror="this.src='https://ui-avatars.com/api/?name={current_user}&background=random&size=128'">
-        </div>
-    """, unsafe_allow_html=True)
-
+    st.markdown(f'<div style="text-align: center;"><img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; border: 3px solid #1E3A8A;" onerror="this.src=\'https://ui-avatars.com/api/?name={current_user}\'"></div>', unsafe_allow_html=True)
 with col_txt:
     st.title(f"Welcome, {current_user}")
     st.write("Official ASM Evaluation Portal")
 
-# --- 8. MAIN FORM LOGIC ---
+# --- 8. EVALUATION FORM ---
 selected_proposal = st.selectbox("Select Proposal Title", ["-- Select --"] + PROPOSALS)
 
 if selected_proposal != "-- Select --":
@@ -166,73 +117,39 @@ if selected_proposal != "-- Select --":
             st.session_state.is_editing = True
             st.rerun()
     else:
-        with st.form("evaluation_form", clear_on_submit=False):
-            st.info("ℹ️ **Flexible Scoring**: Leave at 0.0 if a criterion is not applicable.")
+        with st.form("evaluation_form"):
             inputs = {}
             for name, weight in CRITERIA:
                 col_db = name.lower().replace(" ", "_")
                 d_val = float(existing_data[col_db]) if (existing_data is not None) else 0.0
                 inputs[name] = st.number_input(f"{name} ({int(weight*100)}%)", 0.0, 5.0, d_val, 0.1)
             
-            d_comm = str(existing_data['comments']) if (existing_data is not None) else ""
-            user_comments = st.text_area("Comments / Remarks", value=d_comm)
+            user_comments = st.text_area("Comments", value=str(existing_data['comments']) if existing_data is not None else "")
+            recom = st.radio("Recommendation", ["Pending", "Approve", "Revise", "Reject"], horizontal=True)
             
-            rec_options = ["Pending", "Approve", "Revise", "Reject"]
-            existing_rec = existing_data['recommendation'] if (existing_data is not None) else "Pending"
-            rec_idx = rec_options.index(existing_rec) if existing_rec in rec_options else 0
-            recom = st.radio("Recommendation", rec_options, index=rec_idx, horizontal=True)
-            
-            submit = st.form_submit_button("📤 Submit Evaluation", use_container_width=True, type="primary")
-
-            if submit:
-                w_sum = 0
-                w_used = 0
-                for name, weight in CRITERIA:
-                    if inputs[name] > 0:
-                        w_sum += (inputs[name] * weight)
-                        w_used += weight
-                
+            if st.form_submit_button("📤 Submit Evaluation", use_container_width=True, type="primary"):
+                w_sum = sum(inputs[name] * weight for name, weight in CRITERIA if inputs[name] > 0)
+                w_used = sum(weight for name, weight in CRITERIA if inputs[name] > 0)
                 final_total = round(w_sum / w_used, 2) if w_used > 0 else 0.0
 
                 with conn.session as s:
-                    # 1. Save the score
-                    save_query = text("""
-                        INSERT INTO scores (
-                            evaluator, proposal_title, strategic_alignment, potential_impact, 
-                            feasibility, budget_justification, timeline_readiness, 
-                            execution_strategy, total, recommendation, comments, last_updated
-                        )
-                        VALUES (:ev, :prop, :s1, :s2, :s3, :s4, :s5, :s6, :tot, :rec, :comm, :ts)
-                        ON CONFLICT (evaluator, proposal_title) DO UPDATE SET
-                            strategic_alignment = EXCLUDED.strategic_alignment,
-                            potential_impact = EXCLUDED.potential_impact,
-                            feasibility = EXCLUDED.feasibility,
-                            budget_justification = EXCLUDED.budget_justification,
-                            timeline_readiness = EXCLUDED.timeline_readiness,
-                            execution_strategy = EXCLUDED.execution_strategy,
-                            total = EXCLUDED.total,
-                            recommendation = EXCLUDED.recommendation,
-                            comments = EXCLUDED.comments,
-                            last_updated = EXCLUDED.last_updated;
-                    """)
-                    s.execute(save_query, {
-                        "ev": current_user, "prop": selected_proposal,
-                        "s1": inputs['Strategic Alignment'], "s2": inputs['Potential Impact'],
-                        "s3": inputs['Feasibility'], "s4": inputs['Budget Justification'],
-                        "s5": inputs['Timeline Readiness'], "s6": inputs['Execution Strategy'],
-                        "tot": final_total, "rec": recom, "comm": user_comments, "ts": datetime.now()
-                    })
-                    
-                    # 2. OPTIONAL: Lock the user for one-time submission
-                    # Uncomment the lines below if you want them locked out after ONE submission total
-                    # s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
-                    
+                    s.execute(text("""INSERT INTO scores (evaluator, proposal_title, strategic_alignment, potential_impact, feasibility, budget_justification, timeline_readiness, execution_strategy, total, recommendation, comments, last_updated)
+                                      VALUES (:ev, :prop, :s1, :s2, :s3, :s4, :s5, :s6, :tot, :rec, :comm, :ts)
+                                      ON CONFLICT (evaluator, proposal_title) DO UPDATE SET strategic_alignment=EXCLUDED.strategic_alignment, potential_impact=EXCLUDED.potential_impact, feasibility=EXCLUDED.feasibility, budget_justification=EXCLUDED.budget_justification, timeline_readiness=EXCLUDED.timeline_readiness, execution_strategy=EXCLUDED.execution_strategy, total=EXCLUDED.total, recommendation=EXCLUDED.recommendation, comments=EXCLUDED.comments, last_updated=EXCLUDED.last_updated"""),
+                              {"ev": current_user, "prop": selected_proposal, "s1": inputs['Strategic Alignment'], "s2": inputs['Potential Impact'], "s3": inputs['Feasibility'], "s4": inputs['Budget Justification'], "s5": inputs['Timeline Readiness'], "s6": inputs['Execution Strategy'], "tot": final_total, "rec": recom, "comm": user_comments, "ts": datetime.now()})
                     s.commit()
-                
                 st.session_state.is_editing = False
                 st.balloons()
                 st.rerun()
 else:
     st.info("Please select a proposal title to begin.")
-
-
+    st.divider()
+    st.subheader("🏁 Finish Evaluation")
+    st.write("Click below ONLY after you have finished all proposals.")
+    if st.button("Finalize and Close Session", type="secondary", use_container_width=True):
+        with conn.session as s:
+            s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
+            s.commit()
+        st.success("Session Locked!")
+        time.sleep(2)
+        st.rerun()

@@ -249,39 +249,35 @@ else:
     st.info("💡 Click a row in the table below to edit that proposal.")
     
     if not scored_df.empty:
+        # Prepare the dataframe for display
         summary_display = scored_df.copy()
-        
-        # Rename for cleaner UI
         summary_display = summary_display.rename(columns={
             "proposal_title": "Proposal Name", 
             "total": "Score", 
             "recommendation": "Recommendation",
             "comments": "Remarks"
         })
-        
-        # 1. Convert Score to numeric just in case, handling errors
-        summary_display["Score"] = pd.to_numeric(summary_display["Score"], errors='coerce').fillna(0)
 
-        # 2. Apply styling (Requires matplotlib installed)
-        styled_df = summary_display.style.background_gradient(
-            cmap="Greens", 
-            subset=["Score"], 
-            vmin=0, 
-            vmax=5
-        ).format({
-            "Score": "{:.1f} / 5.0"
-        })
-
-        # 3. Use column_config to bring back wrapping
+        # Display using native Streamlit ProgressColumn for colors
         st.dataframe(
-            styled_df, 
+            summary_display, 
             use_container_width=True, 
             hide_index=True, 
             on_select="rerun", 
             selection_mode="single-row", 
             key="summary_table",
             column_config={
-                "Remarks": st.column_config.TextColumn(width="large", wrap_text=True),
+                "Score": st.column_config.ProgressColumn(
+                    "Score",
+                    help="Score out of 5.0",
+                    format="%.1f",
+                    min_value=0,
+                    max_value=5,
+                ),
+                "Remarks": st.column_config.TextColumn(
+                    width="large", 
+                    wrap_text=True
+                ),
                 "Proposal Name": st.column_config.TextColumn(width="medium"),
                 "Recommendation": st.column_config.TextColumn(width="small"),
             }
@@ -310,5 +306,3 @@ else:
     else:
         st.divider()
         st.info(f"💡 Complete the **{len(remaining)}** remaining proposal(s) to finalize.")
-
-

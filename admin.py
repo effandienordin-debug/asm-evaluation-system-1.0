@@ -68,6 +68,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 5. DIALOGS ---
+
 @st.dialog("✏️ Edit Proposal")
 def edit_proposal_dialog(old_val):
     new_val = st.text_input("Edit Proposal Title", value=old_val)
@@ -109,14 +110,15 @@ def confirm_delete_dialog(table, column, value):
             s.execute(text(f"DELETE FROM {table} WHERE {column} = :val"), {"val": value})
             s.commit()
         st.rerun()
-        
-        @st.dialog("🗑️ Delete Archive Record")
-def delete_archive_dialog(row_id):
-    st.warning(f"Are you sure you want to permanently delete archive record ID: {row_id}?")
+
+@st.dialog("🗑️ Delete Archive Record")
+def delete_archive_dialog(ts):
+    st.warning(f"Are you sure you want to permanently delete archive record from: {ts}?")
     st.info("This action cannot be undone.")
     if st.button("Yes, Delete Permanently", type="primary"):
         with conn.session as s:
-            s.execute(text("DELETE FROM scores_history WHERE id = :id"), {"id": row_id})
+            # Most history tables use the timestamp as the unique key
+            s.execute(text("DELETE FROM scores_history WHERE archive_timestamp = :ts"), {"ts": ts})
             s.commit()
         st.success("Record deleted.")
         time.sleep(1)
@@ -290,13 +292,11 @@ elif menu_choice == "👤 Evaluators & Links":
     st.divider()
     st.subheader("⚙️ System Management")
     
-    # Ensure table exists with a UNIQUE constraint on 'key'
     with conn.session as s:
         s.execute(text("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);"))
         s.execute(text("INSERT INTO settings (key, value) VALUES ('evaluator_password', '1234') ON CONFLICT (key) DO NOTHING;"))
         s.commit()
 
-    # Fetch current password with no cache
     try:
         pass_df = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
         current_db_pass = pass_df.iloc[0]['value'] if not pass_df.empty else "1234"
@@ -304,7 +304,6 @@ elif menu_choice == "👤 Evaluators & Links":
         current_db_pass = "1234"
 
     col_pass1, col_pass2 = st.columns([2, 1])
-    # Changed type to "default" so admin can see what they are setting, or keep "password" if preferred
     new_eval_pass = col_pass1.text_input("Set Global Evaluator Password", value=current_db_pass) 
     
     if col_pass2.button("Update Password", use_container_width=True, type="primary"):
@@ -349,11 +348,31 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     try:
         df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
+        
         if not df_hist.empty:
-            st.dataframe(df_hist, use_container_width=True)
+            # Create a header row
+            h_cols = st.columns([2, 2, 2, 1])
+            h_cols[0].write("**Date**")
+            h_cols[1].write("**Evaluator**")
+            h_cols[2].write("**Proposal**")
+            h_cols[3].write("**Action**")
+            st.divider()
+
+            # Iterate and show delete button
+            for i, row in df_hist.iterrows():
+                c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
+                
+                # Format timestamp
+                ts = row['archive_timestamp']
+                date_str = ts.strftime("%Y-%m-%d %H:%M") if hasattr(ts, 'strftime') else str(ts)
+                
+                c1.write(date_str)
+                c2.write(row['evaluator'])
+                c3.write(row['proposal_title'])
+                
+                if c4.button("🗑️", key=f"del_hist_{i}"):
+                    delete_archive_dialog(row['archive_timestamp'])
         else:
             st.info("No archived records found.")
-    except:
-        st.error("No history table found. It will be created during your first archive.")
-
-
+    except Exception as e:
+        st.error(f"Error loading history: {e}")

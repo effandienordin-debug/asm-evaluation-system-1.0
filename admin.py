@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-from sqlalchemy import text  # Required for SQL execution
+from sqlalchemy import text
 
 # --- Page Config ---
 st.set_page_config(page_title="ASM Admin Panel", layout="wide")
@@ -40,6 +40,31 @@ def delete_item(table, column, value):
         s.execute(query, {"val": value})
         s.commit()
 
+# --- NEW: Confirmation Dialog ---
+@st.dialog("⚠️ Confirm Deletion")
+def confirm_delete_dialog(table, column, value, label):
+    st.warning(f"Are you sure you want to delete **'{value}'** from {label}?")
+    st.info("This action cannot be undone.")
+    if st.button("Confirm Delete", type="primary", use_container_width=True):
+        delete_item(table, column, value)
+        st.toast(f"🗑️ Deleted: {value}")
+        st.rerun()
+
+# --- Callback Functions to clear text boxes ---
+def handle_add_proposal():
+    val = st.session_state.new_prop.strip()
+    if val:
+        add_item("proposals", "title", val)
+        st.toast(f"✅ Added Proposal: {val}")
+        st.session_state.new_prop = "" # Clear input
+
+def handle_add_evaluator():
+    val = st.session_state.new_eval.strip()
+    if val:
+        add_item("evaluators", "name", val)
+        st.toast(f"✅ Added Evaluator: {val}")
+        st.session_state.new_eval = "" # Clear input
+
 # --- Main Admin UI ---
 try:
     st.image("80x68.png", width=100)
@@ -50,67 +75,63 @@ st.title("🛡️ Admin Control Center")
 
 tab1, tab2, tab3 = st.tabs(["📋 Proposals", "👤 Evaluators", "🔗 Links"])
 
-# --- TAB 1 & 2: Lists Management ---
+# --- TAB 1: Proposals ---
 with tab1:
     st.subheader("Manage Proposals")
-    p_input = st.text_input("New Proposal Title", key="new_prop")
-    if st.button("Add Proposal"):
-        if p_input: 
-            add_item("proposals", "title", p_input)
-            st.rerun()
+    st.text_input("New Proposal Title", key="new_prop")
+    st.button("Add Proposal", on_click=handle_add_proposal)
     
     props = get_items("proposals", "title")
     for p in props:
         c1, c2 = st.columns([6, 1])
         c1.write(f"• {p}")
         if c2.button("🗑️", key=f"del_p_{p}"):
-            delete_item("proposals", "title", p)
-            st.rerun()
+            confirm_delete_dialog("proposals", "title", p, "Proposals")
 
+# --- TAB 2: Evaluators ---
 with tab2:
     st.subheader("Manage Evaluators")
-    e_input = st.text_input("New Evaluator Name", key="new_eval")
-    if st.button("Add Evaluator"):
-        if e_input: 
-            add_item("evaluators", "name", e_input)
-            st.rerun()
+    st.text_input("New Evaluator Name", key="new_eval")
+    st.button("Add Evaluator", on_click=handle_add_evaluator)
             
     evals = get_items("evaluators", "name")
     for e in evals:
         c1, c2 = st.columns([6, 1])
         c1.write(f"• {e}")
         if c2.button("🗑️", key=f"del_e_{e}"):
-            delete_item("evaluators", "name", e)
-            st.rerun()
+            confirm_delete_dialog("evaluators", "name", e, "Evaluators")
 
 # --- TAB 3: Link Generator ---
 with tab3:
     st.subheader("Personalized Access Links")
-    if evals:
+    # We fetch fresh evals here so the link generator clears automatically
+    current_evals = get_items("evaluators", "name") 
+    if current_evals:
         base_url = st.text_input("Application Base URL", value="https://your-app.streamlit.app").rstrip('/')
         copy_text = "📋 *ASM EVALUATOR LINKS*\n\n"
         link_data = []
-        for i, name in enumerate(evals):
+        for i, name in enumerate(current_evals):
             link = f"{base_url}/?user={i}"
             copy_text += f"👤 {name}:\n🔗 {link}\n\n"
             link_data.append({"Evaluator": name, "URL": link})
+        
         st.dataframe(pd.DataFrame(link_data), use_container_width=True, hide_index=True)
         st.text_area("Copy-Paste Block", value=copy_text, height=200)
+    else:
+        st.info("Add evaluators to generate links.")
 
 st.divider()
 
 # --- Executive Summary & Tracker ---
 st.header("📊 Executive Summary")
-try:
-    df_scores = conn.query("SELECT * FROM scores;", ttl="2s")
-except:
-    df_scores = pd.DataFrame()
+df_scores = conn.query("SELECT * FROM scores;", ttl="0s") # Set ttl to 0 for real-time updates
 
 if not df_scores.empty:
     with st.expander("👀 View Global Performance Summary", expanded=True):
         numeric_cols = df_scores.select_dtypes(include=['number']).columns
-        grand_means = df_scores[numeric_cols].mean().round(2)
-        st.table(grand_means.rename("Average Score"))
+        if not numeric_cols.empty:
+            grand_means = df_scores[numeric_cols].mean().round(2)
+            st.table(grand_means.rename("Average Score"))
         st.dataframe(df_scores, use_container_width=True)
 
 # --- Session Control (Archive) ---
@@ -126,4 +147,5 @@ if st.button("🆕 Archive & Reset Dashboard", type="primary"):
             s.execute(text("DELETE FROM scores;"))
             s.commit()
         st.balloons()
+        st.toast(f"📁 Session '{archive_name}' archived.")
         st.rerun()

@@ -190,3 +190,34 @@ if evals_all:
                     <p style="font-size:0.8em; margin:0; color:#666;">{'✅ DONE' if is_done else '⌛ WAITING'}</p>
                 </div>
             """, unsafe_allow_html=True)
+            # --- 7. SESSION CONTROL (Archive & Reset) ---
+st.divider()
+st.header("🚀 Session Control")
+
+# Archive logic for Cloud SQL
+force_mode = st.toggle("⚠️ Enable Force Archive")
+total_evals_count = len(evals_all)
+count_submitted = len(unique_submitted)
+
+# Archive allowed if everyone is done OR force mode is on
+can_archive = (count_submitted >= total_evals_count and total_evals_count > 0) or force_mode
+
+if st.button("🆕 Archive & Reset Dashboard", type="primary", use_container_width=True, disabled=not can_archive):
+    try:
+        with conn.session as s:
+            # 1. Copy current scores to history table
+            s.execute(text("""
+                INSERT INTO scores_history 
+                SELECT *, NOW() as archive_timestamp FROM scores;
+            """))
+            # 2. Clear the active scores table
+            s.execute(text("TRUNCATE TABLE scores CASCADE;"))
+            s.commit()
+            
+        st.balloons()
+        st.success("Current session archived to 'scores_history' and dashboard reset!")
+        time.sleep(2)
+        st.rerun()
+    except Exception as e:
+        st.error(f"Archive failed: {e}. Ensure a 'scores_history' table exists in your database.")
+

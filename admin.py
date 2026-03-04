@@ -258,19 +258,33 @@ if evals_all:
 st.divider()
 st.header("🚀 Session Control")
 
+# 1. Fetch History to display it
+try:
+    df_history = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
+except:
+    df_history = pd.DataFrame()
+
+with st.expander(f"📚 View Archived Sessions ({len(df_history)})"):
+    if not df_history.empty:
+        st.dataframe(df_history, use_container_width=True)
+    else:
+        st.info("No archived sessions found.")
+
+# 2. Archive Action
 force_mode = st.toggle("⚠️ Enable Force Archive")
-total_evals_count = len(evals_all)
-count_submitted = len(unique_submitted)
-can_archive = (count_submitted >= total_evals_count and total_evals_count > 0) or force_mode
+can_archive = (len(unique_submitted) >= len(evals_all) and len(evals_all) > 0) or force_mode
 
 if st.button("🆕 Archive & Reset Dashboard", type="primary", use_container_width=True, disabled=not can_archive):
     try:
         with conn.session as s:
+            # Move data to history
             s.execute(text("INSERT INTO scores_history SELECT *, NOW() as archive_timestamp FROM scores;"))
-            s.execute(text("TRUNCATE TABLE scores CASCADE;"))
+            # Clear the current scores
+            s.execute(text("TRUNCATE TABLE scores RESTART IDENTITY CASCADE;"))
             s.commit()
+        
         st.balloons()
-        st.success("Session archived and reset!")
+        st.success("Current session has been moved to history!")
         time.sleep(2)
         st.rerun()
     except Exception as e:

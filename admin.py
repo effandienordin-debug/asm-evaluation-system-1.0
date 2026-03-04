@@ -36,24 +36,35 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 3. DIALOGS (The missing Pop-ups) ---
-@st.dialog("🗑️ Confirm Deletion")
-def confirm_delete_item(table, column, value):
-    st.write(f"Are you sure you want to delete **{value}**?")
-    if st.button(f"Yes, Delete", type="primary", use_container_width=True):
+@st.dialog("✏️ Edit Proposal")
+def edit_proposal_dialog(old_val):
+    new_val = st.text_input("Edit Proposal Title", value=old_val)
+    if st.button("Update Title", type="primary"):
         with conn.session as s:
-            s.execute(text(f"DELETE FROM {table} WHERE {column} = :v"), {"v": value})
+            # Update the title in the proposals table
+            s.execute(text("UPDATE proposals SET title = :new WHERE title = :old"), 
+                      {"new": new_val.strip(), "old": old_val})
+            # Also update any scores already linked to this proposal to maintain integrity
+            s.execute(text("UPDATE scores SET proposal_title = :new WHERE proposal_title = :old"), 
+                      {"new": new_val.strip(), "old": old_val})
             s.commit()
-        st.success(f"Deleted {value}")
+        st.success("Proposal updated!")
         time.sleep(1)
         st.rerun()
 
-@st.dialog("🚨 Clear All Data")
-def confirm_clear_table(table, label):
-    st.warning(f"This will delete ALL {label} permanently!")
-    if st.button(f"Nuke All {label}", type="primary", use_container_width=True):
+@st.dialog("✏️ Edit Evaluator")
+def edit_evaluator_dialog(old_name):
+    new_name = st.text_input("Edit Evaluator Name", value=old_name)
+    st.info("Note: To change the photo, simply upload a new one in the main 'Add' form with the same name.")
+    if st.button("Update Name", type="primary"):
         with conn.session as s:
-            s.execute(text(f"TRUNCATE TABLE {table} CASCADE;"))
+            s.execute(text("UPDATE evaluators SET name = :new WHERE name = :old"), 
+                      {"new": new_name.strip(), "old": old_name})
+            s.execute(text("UPDATE scores SET evaluator = :new WHERE evaluator = :old"), 
+                      {"new": new_name.strip(), "old": old_name})
             s.commit()
+        st.success("Evaluator updated!")
+        time.sleep(1)
         st.rerun()
 
 # --- 4. HELPER FUNCTIONS ---
@@ -110,13 +121,18 @@ with tab1:
 
 # --- TAB 2: EVALUATORS ---
 with tab2:
-    st.subheader("Manage Evaluators")
-    with st.form("eval_form", clear_on_submit=True):
-        e_name = st.text_input("Evaluator Full Name")
-        e_photo = st.file_uploader("Profile Photo", type=['png', 'jpg', 'jpeg'])
-        if st.form_submit_button("Add Evaluator", type="primary"):
-            if e_name:
-                add_item_sql("evaluators", "name", e_name)
+    evals = get_items_sql("evaluators", "name")
+    with st.expander(f"🔍 View/Edit Evaluators ({len(evals)})"):
+        search_e = st.text_input("Filter Evaluators...")
+        for e in [x for x in evals if search_e.lower() in x.lower()]:
+            c1, c2, c3, c4 = st.columns([1, 4, 1, 1])
+            img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
+            c1.image(img_url, width=40)
+            c2.write(e)
+            if c3.button("✏️", key=f"edit_e_{e}"):
+                edit_evaluator_dialog(e)
+            if c4.button("🗑️", key=f"del_e_{e}"):
+                confirm_delete_item("evaluators", "name", e)
                 if e_photo:
                     file_path = f"{e_name.strip().replace(' ', '_')}.png"
                     supabase.storage.from_(BUCKET_NAME).upload(
@@ -220,4 +236,5 @@ if st.button("🆕 Archive & Reset Dashboard", type="primary", use_container_wid
         st.rerun()
     except Exception as e:
         st.error(f"Archive failed: {e}. Ensure a 'scores_history' table exists in your database.")
+
 

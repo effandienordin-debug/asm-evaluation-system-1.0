@@ -109,6 +109,18 @@ def confirm_delete_dialog(table, column, value):
             s.execute(text(f"DELETE FROM {table} WHERE {column} = :val"), {"val": value})
             s.commit()
         st.rerun()
+        
+        @st.dialog("🗑️ Delete Archive Record")
+def delete_archive_dialog(row_id):
+    st.warning(f"Are you sure you want to permanently delete archive record ID: {row_id}?")
+    st.info("This action cannot be undone.")
+    if st.button("Yes, Delete Permanently", type="primary"):
+        with conn.session as s:
+            s.execute(text("DELETE FROM scores_history WHERE id = :id"), {"id": row_id})
+            s.commit()
+        st.success("Record deleted.")
+        time.sleep(1)
+        st.rerun()
 
 # --- 6. HELPER FUNCTIONS ---
 def get_items_sql(table, column):
@@ -343,4 +355,5 @@ elif menu_choice == "📜 History":
             st.info("No archived records found.")
     except:
         st.error("No history table found. It will be created during your first archive.")
+
 

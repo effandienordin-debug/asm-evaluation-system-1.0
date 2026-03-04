@@ -11,6 +11,38 @@ from streamlit_autorefresh import st_autorefresh
 # --- 1. CONFIG & CONNECTIONS ---
 st.set_page_config(page_title="ASM Admin Panel", layout="wide")
 
+# --- 2. LOGIN LOGIC ---
+def check_password():
+    """Returns True if the user had the correct password."""
+    def password_entered():
+        # Change 'admin_password' to whatever you want your password to be
+        # Or better: st.secrets["password"] if using Streamlit Cloud
+        if st.session_state["password"] == "admin123": 
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # don't store password
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        # First run, show input for password
+        st.title("🛡️ ASM Admin Login")
+        st.text_input("Password", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        # Password not correct, show input + error
+        st.title("🛡️ ASM Admin Login")
+        st.text_input("Password", type="password", on_change=password_entered, key="password")
+        st.error("😕 Password incorrect")
+        return False
+    else:
+        # Password correct.
+        return True
+
+if not check_password():
+    st.stop()  # Do not run the rest of the app if not logged in
+
+# --- 3. THE REST OF YOUR APP (Only runs if logged in) ---
+
 # Supabase Credentials
 SUPABASE_URL = "https://qizxricvzsnsfjibfmxw.supabase.co"
 SUPABASE_KEY = "sb_publishable_bWcVZlRASQwMaUCtgklX3Q_yaCUAfxO"
@@ -23,7 +55,7 @@ except Exception as e:
 
 conn = st.connection("postgresql", type="sql")
 
-# --- 2. FORCED WHITE THEME CSS ---
+# --- 4. FORCED WHITE THEME CSS ---
 st.markdown("""
     <style>
     .stApp { background-color: #FFFFFF !important; color: #000000 !important; }
@@ -39,7 +71,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. DIALOGS ---
+# --- 5. DIALOGS (Same as before) ---
 @st.dialog("✏️ Edit Proposal")
 def edit_proposal_dialog(old_val):
     new_val = st.text_input("Edit Proposal Title", value=old_val)
@@ -79,7 +111,7 @@ def confirm_delete_dialog(table, column, value):
             s.commit()
         st.rerun()
 
-# --- 4. HELPER FUNCTIONS ---
+# --- 6. HELPER FUNCTIONS ---
 def get_items_sql(table, column):
     try:
         df = conn.query(f"SELECT {column} FROM {table} ORDER BY {column} ASC;", ttl=0)
@@ -91,11 +123,17 @@ def add_item_sql(table, column, value):
         s.execute(text(f"INSERT INTO {table} ({column}) VALUES (:val) ON CONFLICT DO NOTHING;"), {"val": value.strip()})
         s.commit()
 
-# --- 5. SIDEBAR NAVIGATION & CONTROL ---
+# --- 7. SIDEBAR NAVIGATION & CONTROL ---
 cache_buster = int(time.time())
 
 with st.sidebar:
     st.title("🛡️ ASM Admin")
+    
+    # Logout Button
+    if st.button("🚪 Logout"):
+        st.session_state["password_correct"] = False
+        st.rerun()
+        
     st.divider()
     
     auto_refresh = st.toggle("🔄 Auto Refresh (15s)", value=False)
@@ -129,7 +167,7 @@ with st.sidebar:
         time.sleep(1)
         st.rerun()
 
-# --- 6. MAIN CONTENT AREA ---
+# --- 8. MAIN CONTENT AREA ---
 
 if menu_choice == "📊 Tracker":
     st.header("📊 Live Performance Metrics")
@@ -203,17 +241,9 @@ elif menu_choice == "👤 Evaluators & Links":
     with col_links:
         st.subheader("Access Links")
         if evals_all:
-            # --- DYNAMIC URL DETECTION ---
-            # This detects the current app URL automatically
-            detected_url = "http://localhost:8501" # Default fallback
-            try:
-                # If on Streamlit Cloud, this often resides in headers or can be set via env
-                # For now, we allow the user to see/edit it, but we default to the current host
-                detected_url = st.text_input("App Base URL", value="https://your-app-name.streamlit.app").rstrip('/')
-            except:
-                pass
-
-            link_data = [{"Name": n, "Link": f"{detected_url}/?user={i}"} for i, n in enumerate(evals_all)]
+            target_url = "https://asm-evaluation-system-10-evaluation-form.streamlit.app"
+            link_data = [{"Name": n, "Link": f"{target_url}/?user={n.replace(' ', '%20')}"} for n in evals_all]
+            
             st.table(pd.DataFrame(link_data))
             
             if st.button("🖼️ Generate QR Codes"):

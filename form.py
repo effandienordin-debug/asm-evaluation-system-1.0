@@ -113,13 +113,10 @@ st.write(f"**Overall Progress: {done_count} / {total_count} Proposals Evaluated*
 st.progress(done_count / total_count if total_count > 0 else 0)
 st.divider()
 
-# --- 9. EVALUATION FORM & AUTO-SAVE LOGIC ---
-
-# 1. Initialize a key for the selectbox in session state if it doesn't exist
+# --- 9. EVALUATION FORM & NAVIGATION ---
 if "proposal_selector" not in st.session_state:
     st.session_state.proposal_selector = "-- Select --"
 
-# 2. Use the session state variable to control the selectbox
 selected_proposal = st.selectbox(
     "Select Proposal Title", 
     ["-- Select --"] + PROPOSALS,
@@ -146,25 +143,41 @@ if selected_proposal != "-- Select --":
                 st.session_state.is_editing = True
                 st.rerun()
         with col_back:
-            # THIS IS THE FIX: Manually reset the selectbox key to return to summary
             if st.button("⬅️ Back to Summary", use_container_width=True):
                 st.session_state.proposal_selector = "-- Select --"
                 st.rerun()
     else:
-        # ... (Rest of your form code remains the same)
         with st.form("evaluation_form"):
-            # (Inputs here...)
-            # ...
+            st.info("ℹ️ Drafts are saved automatically while you stay on this page.")
+            inputs = {}
+            for name, weight in CRITERIA:
+                col_db = name.lower().replace(" ", "_")
+                # Load: Session State > DB > 0.0
+                saved_val = st.session_state.get(f"{draft_key}_{col_db}", float(existing_data[col_db]) if existing_data is not None else 0.0)
+                inputs[name] = st.number_input(f"{name} ({int(weight*100)}%)", 0.0, 5.0, saved_val, 0.1)
+            
+            saved_comm = st.session_state.get(f"{draft_key}_comm", str(existing_data['comments']) if existing_data is not None else "")
+            user_comments = st.text_area("Comments / Remarks", value=saved_comm)
+            
+            recom = st.radio("Recommendation", ["Pending", "Approve", "Revise", "Reject"], horizontal=True)
+            
             col_sub, col_can = st.columns(2)
             with col_sub:
                 submit = st.form_submit_button("📤 Submit Evaluation", use_container_width=True, type="primary")
             with col_can:
-                # FIX: Also reset the selector on Cancel
                 cancel = st.form_submit_button("❌ Cancel", use_container_width=True)
 
             if submit:
-                # ... (Your save logic here) ...
-                # After saving, reset selector to show the updated summary table
+                w_sum = sum(inputs[name] * weight for name, weight in CRITERIA if inputs[name] > 0)
+                w_used = sum(weight for name, weight in CRITERIA if inputs[name] > 0)
+                final_total = round(w_sum / w_used, 2) if w_used > 0 else 0.0
+
+                with conn.session as s:
+                    s.execute(text("""INSERT INTO scores (evaluator, proposal_title, strategic_alignment, potential_impact, feasibility, budget_justification, timeline_readiness, execution_strategy, total, recommendation, comments, last_updated)
+                                      VALUES (:ev, :prop, :s1, :s2, :s3, :s4, :s5, :s6, :tot, :rec, :comm, :ts)
+                                      ON CONFLICT (evaluator, proposal_title) DO UPDATE SET strategic_alignment=EXCLUDED.strategic_alignment, total=EXCLUDED.total, recommendation=EXCLUDED.recommendation, comments=EXCLUDED.comments, last_updated=EXCLUDED.last_updated"""),
+                              {"ev": current_user, "prop": selected_proposal, "s1": inputs['Strategic Alignment'], "s2": inputs['Potential Impact'], "s3": inputs['Feasibility'], "s4": inputs['Budget Justification'], "s5": inputs['Timeline Readiness'], "s6": inputs['Execution Strategy'], "tot": final_total, "rec": recom, "comm": user_comments, "ts": datetime.now()})
+                    s.commit()
                 st.session_state.proposal_selector = "-- Select --"
                 st.session_state.is_editing = False
                 st.success("Evaluation Saved!")
@@ -176,15 +189,15 @@ if selected_proposal != "-- Select --":
                 st.session_state.is_editing = False
                 st.rerun()
 
-        # Update draft state silently outside the form
+        # Update draft state
         for name, _ in CRITERIA:
-            col_db = name.lower().replace(" ", "_")
-            st.session_state[f"{draft_key}_{col_db}"] = inputs[name]
+            st.session_state[f"{draft_key}_{name.lower().replace(' ', '_')}"] = inputs[name]
         st.session_state[f"{draft_key}_comm"] = user_comments
 
 else:
-    # --- 10. PROGRESS DASHBOARD ---
+    # --- 10. CLICKABLE SUMMARY TABLE ---
     st.subheader("📊 Your Evaluation Summary")
+    st.info("💡 Click a row in the table below to view or edit that proposal.")
     
     if not scored_df.empty:
         summary_display = scored_df.rename(columns={
@@ -192,14 +205,32 @@ else:
             "total": "Score",
             "comments": "Remarks"
         })
-        st.dataframe(summary_display, use_container_width=True, hide_index=True)
+        
+        # Enable row selection
+        event = st.dataframe(
+            summary_display,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row"
+        )
+        
+        # If user clicks a row, set the selector and rerun
+        if event and event.selection.rows:
+            selected_idx = event.selection.rows[0]
+            clicked_prop = summary_display.iloc[selected_idx]["Proposal Name"]
+            st.session_state.proposal_selector = clicked_prop
+            st.rerun()
     else:
         st.info("No proposals evaluated yet.")
 
     remaining = [p for p in PROPOSALS if p not in completed_proposals]
     if remaining:
         with st.expander("⏳ View Remaining Proposals"):
-            for p in remaining: st.write(f"▫️ {p}")
+            for p in remaining:
+                if st.button(f"📝 Start: {p}", key=f"btn_{p}", use_container_width=True):
+                    st.session_state.proposal_selector = p
+                    st.rerun()
 
     # --- 11. CONDITIONAL FINALIZE ---
     all_done = (len(remaining) == 0 and total_count > 0)
@@ -217,4 +248,3 @@ else:
     else:
         st.divider()
         st.info(f"💡 Complete the **{len(remaining)}** remaining proposal(s) to finalize.")
-

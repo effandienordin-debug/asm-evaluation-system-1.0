@@ -22,14 +22,13 @@ conn = st.connection("postgresql", type="sql")
 # --- 3. HELPER FUNCTIONS ---
 def get_cloud_list(table, column):
     try:
-        # ttl=0 ensures we don't fetch "old" cached data from Streamlit's memory
+        # Using a raw string here prevents hashing errors
         df = conn.query(f"SELECT {column} FROM {table} ORDER BY {column} ASC;", ttl=0)
         return df[column].tolist() if not df.empty else []
     except:
         return []
 
-# --- 4. AUTO-REFRESH (The "Heartbeat") ---
-# Refreshes every 30 seconds to check for Admin updates (new photos/proposals)
+# --- 4. AUTO-REFRESH ---
 st_autorefresh(interval=30000, key="evaluator_heartbeat")
 
 EVALUATORS = get_cloud_list("evaluators", "name")
@@ -48,7 +47,6 @@ except:
     st.stop()
 
 # --- 6. HEADER WITH PHOTO & CACHE BUSTER ---
-# Unique timestamp forces the browser to ignore its cache and download the new photo
 cache_buster = int(datetime.now().timestamp())
 
 col_img, col_txt = st.columns([1, 4])
@@ -71,9 +69,9 @@ with col_txt:
 selected_proposal = st.selectbox("Select Proposal Title", ["-- Select --"] + PROPOSALS)
 
 if selected_proposal != "-- Select --":
-    # LOAD DATA - ttl="0s" is vital for real-time accuracy
-    query = text("SELECT * FROM scores WHERE evaluator = :ev AND proposal_title = :prop LIMIT 1;")
-    df_match = conn.query(query, params={"ev": current_user, "prop": selected_proposal}, ttl="0s")
+    # FIX: Use a raw string instead of text() to avoid UnhashableParamError
+    query = "SELECT * FROM scores WHERE evaluator = :ev AND proposal_title = :prop LIMIT 1;"
+    df_match = conn.query(query, params={"ev": current_user, "prop": selected_proposal}, ttl=0)
     existing_data = df_match.iloc[0] if not df_match.empty else None
 
     if "is_editing" not in st.session_state:
@@ -109,7 +107,6 @@ if selected_proposal != "-- Select --":
             submit = st.form_submit_button("📤 Submit Evaluation", use_container_width=True, type="primary")
 
             if submit:
-                # Proportional Weighting Calculation
                 w_sum = 0
                 w_used = 0
                 for name, weight in CRITERIA:
@@ -120,6 +117,7 @@ if selected_proposal != "-- Select --":
                 final_total = round(w_sum / w_used, 2) if w_used > 0 else 0.0
 
                 with conn.session as s:
+                    # Note: text() is still required for s.execute operations
                     save_query = text("""
                         INSERT INTO scores (
                             evaluator, proposal_title, strategic_alignment, potential_impact, 

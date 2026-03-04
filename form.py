@@ -121,7 +121,7 @@ with col_txt:
     st.title(f"Welcome, {current_user}")
     st.write("Official ASM Evaluation Portal")
 
-# --- 10. PROGRESS DATA FETCH (Added Recommendation) ---
+# --- 10. PROGRESS DATA FETCH ---
 try:
     scored_df = conn.query("SELECT proposal_title, total, recommendation, comments FROM scores WHERE evaluator = :ev", params={"ev": current_user}, ttl=0)
     completed_proposals = scored_df['proposal_title'].tolist() if not scored_df.empty else []
@@ -244,13 +244,13 @@ if selected_proposal != "-- Select --":
             st.session_state[f"{draft_key}_dirty"] = True
 
 else:
-    # --- 13. SUMMARY DASHBOARD (Added Rec & Score Formatting) ---
+    # --- 13. SUMMARY DASHBOARD ---
     st.subheader("📊 Your Evaluation Summary")
     st.info("💡 Click a row in the table below to edit that proposal.")
     
     if not scored_df.empty:
-        # Create a copy to format scores as "X / 5.0"
         summary_display = scored_df.copy()
+        # Format score as "X / 5.0"
         summary_display['total'] = summary_display['total'].apply(lambda x: f"{x} / 5.0")
         
         summary_display = summary_display.rename(columns={
@@ -266,7 +266,13 @@ else:
             hide_index=True, 
             on_select="rerun", 
             selection_mode="single-row", 
-            key="summary_table"
+            key="summary_table",
+            column_config={
+                "Remarks": st.column_config.TextColumn("Remarks", width="large", wrap_text=True),
+                "Proposal Name": st.column_config.TextColumn("Proposal Name", width="medium"),
+                "Score": st.column_config.TextColumn("Score", width="small"),
+                "Recommendation": st.column_config.TextColumn("Recommendation", width="small"),
+            }
         )
     else:
         st.info("No proposals evaluated yet.")

@@ -25,25 +25,25 @@ conn = st.connection("postgresql", type="sql")
 # --- 3. LOGIN LOGIC ---
 def check_password():
     def password_entered():
+        # Fetch fresh password from DB
         try:
             pass_df = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
             db_password = pass_df.iloc[0]['value'] if not pass_df.empty else None
         except:
             db_password = None
         
-        if st.session_state["password"] == db_password:
+        if st.session_state["password_input"] == db_password:
             st.session_state["password_correct"] = True
-            del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
 
     if "password_correct" not in st.session_state:
         st.title("🔐 ASM Evaluator Login")
-        st.text_input("Enter Access Password", type="password", on_change=password_entered, key="password")
+        st.text_input("Enter Access Password", type="password", on_change=password_entered, key="password_input")
         return False
     elif not st.session_state["password_correct"]:
         st.title("🔐 ASM Secure Access")
-        st.text_input("Please enter the access password", type="password", on_change=password_entered, key="password")
+        st.text_input("Please enter the access password", type="password", on_change=password_entered, key="password_input")
         st.error("😕 Password incorrect")
         return False
     return True
@@ -329,3 +329,4 @@ else:
     else:
         st.divider()
         st.info(f"💡 Complete the **{len(remaining)}** remaining proposal(s) to finalize.")
+

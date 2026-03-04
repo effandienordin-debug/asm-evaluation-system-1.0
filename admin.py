@@ -207,7 +207,7 @@ elif menu_choice == "👤 Evaluators & Links":
     with col_links:
         st.subheader("Access Links")
         if evals_all:
-            base_url = st.text_input("Base URL", value="https://your-app.streamlit.app").rstrip('/')
+            base_url = st.text_input("Base URL", value="https://asm-evaluation-system-10-evaluation-form.streamlit.app").rstrip('/')
             link_data = [{"Name": n, "Link": f"{base_url}/?user={i}"} for i, n in enumerate(evals_all)]
             st.dataframe(pd.DataFrame(link_data), hide_index=True)
             if st.button("📋 Show Links for Copying"):
@@ -246,3 +246,4 @@ elif menu_choice == "📜 History":
                 st.rerun()
     else:
         st.info("No data in archive.")
+

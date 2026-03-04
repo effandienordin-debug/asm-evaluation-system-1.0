@@ -274,28 +274,32 @@ elif menu_choice == "👤 Evaluators & Links":
                     with qr_cols[idx % 3]:
                         st.image(buf.getvalue(), caption=f"Login: {d['Nickname']}", use_container_width=True)
 
-    # --- PASSWORD RESET & SYSTEM SETTINGS ---
+    # --- 9. PASSWORD RESET & SYSTEM SETTINGS ---
     st.divider()
     st.subheader("⚙️ System Management")
     
-    # Logic to handle global evaluator password
+    # Ensure table exists with a UNIQUE constraint on 'key'
+    with conn.session as s:
+        s.execute(text("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);"))
+        s.execute(text("INSERT INTO settings (key, value) VALUES ('evaluator_password', '1234') ON CONFLICT (key) DO NOTHING;"))
+        s.commit()
+
+    # Fetch current password with no cache
     try:
-        with conn.session as s:
-            s.execute(text("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);"))
-            s.execute(text("INSERT INTO settings (key, value) VALUES ('evaluator_password', '1234') ON CONFLICT DO NOTHING;"))
-            s.commit()
         pass_df = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
         current_db_pass = pass_df.iloc[0]['value'] if not pass_df.empty else "1234"
     except:
         current_db_pass = "1234"
 
     col_pass1, col_pass2 = st.columns([2, 1])
-    new_eval_pass = col_pass1.text_input("Reset Evaluator Login Password", value=current_db_pass, type="password")
-    if col_pass2.button("Update Global Password", use_container_width=True):
+    # Changed type to "default" so admin can see what they are setting, or keep "password" if preferred
+    new_eval_pass = col_pass1.text_input("Set Global Evaluator Password", value=current_db_pass) 
+    
+    if col_pass2.button("Update Password", use_container_width=True, type="primary"):
         with conn.session as s:
             s.execute(text("UPDATE settings SET value = :v WHERE key = 'evaluator_password'"), {"v": new_eval_pass.strip()})
             s.commit()
-        st.success("✅ Password Updated!")
+        st.success(f"✅ Password updated to: {new_eval_pass}")
         time.sleep(1)
         st.rerun()
 
@@ -339,3 +343,4 @@ elif menu_choice == "📜 History":
             st.info("No archived records found.")
     except:
         st.error("No history table found. It will be created during your first archive.")
+

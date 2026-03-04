@@ -249,7 +249,6 @@ else:
     st.info("💡 Click a row in the table below to edit that proposal.")
     
     if not scored_df.empty:
-        # Prepare the dataframe for display
         summary_display = scored_df.copy()
         summary_display = summary_display.rename(columns={
             "proposal_title": "Proposal Name", 
@@ -258,7 +257,7 @@ else:
             "comments": "Remarks"
         })
 
-        # Display using native Streamlit ProgressColumn for colors
+        # Progress bar column provides the "Darker/Color" effect you wanted for high scores
         st.dataframe(
             summary_display, 
             use_container_width=True, 
@@ -269,15 +268,11 @@ else:
             column_config={
                 "Score": st.column_config.ProgressColumn(
                     "Score",
-                    help="Score out of 5.0",
                     format="%.1f",
                     min_value=0,
                     max_value=5,
                 ),
-                "Remarks": st.column_config.TextColumn(
-                    width="large", 
-                    wrap_text=True
-                ),
+                "Remarks": st.column_config.TextColumn(width="large"), # wrap_text removed to fix TypeError
                 "Proposal Name": st.column_config.TextColumn(width="medium"),
                 "Recommendation": st.column_config.TextColumn(width="small"),
             }

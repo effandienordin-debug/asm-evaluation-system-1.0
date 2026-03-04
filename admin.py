@@ -35,16 +35,14 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. DIALOGS (The missing Pop-ups) ---
+# --- 3. DIALOGS ---
 @st.dialog("✏️ Edit Proposal")
 def edit_proposal_dialog(old_val):
     new_val = st.text_input("Edit Proposal Title", value=old_val)
     if st.button("Update Title", type="primary"):
         with conn.session as s:
-            # Update the title in the proposals table
             s.execute(text("UPDATE proposals SET title = :new WHERE title = :old"), 
                       {"new": new_val.strip(), "old": old_val})
-            # Also update any scores already linked to this proposal to maintain integrity
             s.execute(text("UPDATE scores SET proposal_title = :new WHERE proposal_title = :old"), 
                       {"new": new_val.strip(), "old": old_val})
             s.commit()
@@ -55,7 +53,6 @@ def edit_proposal_dialog(old_val):
 @st.dialog("✏️ Edit Evaluator")
 def edit_evaluator_dialog(old_name):
     new_name = st.text_input("Edit Evaluator Name", value=old_name)
-    st.info("Note: To change the photo, simply upload a new one in the main 'Add' form with the same name.")
     if st.button("Update Name", type="primary"):
         with conn.session as s:
             s.execute(text("UPDATE evaluators SET name = :new WHERE name = :old"), 
@@ -65,6 +62,15 @@ def edit_evaluator_dialog(old_name):
             s.commit()
         st.success("Evaluator updated!")
         time.sleep(1)
+        st.rerun()
+
+@st.dialog("🗑️ Confirm Delete")
+def confirm_delete_dialog(table, column, value):
+    st.warning(f"Are you sure you want to delete '{value}'?")
+    if st.button("Yes, Delete permanently", type="primary"):
+        with conn.session as s:
+            s.execute(text(f"DELETE FROM {table} WHERE {column} = :val"), {"val": value})
+            s.commit()
         st.rerun()
 
 # --- 4. HELPER FUNCTIONS ---
@@ -82,6 +88,9 @@ def add_item_sql(table, column, value):
 
 # --- 5. MAIN UI ---
 st.title("🛡️ ASM Admin Control Center")
+
+# --- DEFINE CACHE BUSTER AT TOP OF UI TO PREVENT NAMEERROR ---
+cache_buster = int(time.time())
 
 col_ref1, col_ref2 = st.columns([6, 1])
 with col_ref2:
@@ -109,18 +118,31 @@ with tab1:
             st.rerun()
 
     props = get_items_sql("proposals", "title")
-    with st.expander(f"🔍 View/Search Proposals ({len(props)})"):
+    with st.expander(f"🔍 View/Edit Proposals ({len(props)})"):
         search_p = st.text_input("Filter Proposals...")
         for p in [x for x in props if search_p.lower() in x.lower()]:
-            c1, c2 = st.columns([6, 1])
+            c1, c2, c3 = st.columns([5, 1, 1])
             c1.write(f"• {p}")
-            if c2.button("🗑️", key=f"del_p_{p}"):
-                confirm_delete_item("proposals", "title", p)
-        if props:
-            if st.button("🚨 Clear All Proposals", type="secondary"): confirm_clear_table("proposals", "Proposals")
+            if c2.button("✏️", key=f"edit_p_{p}"): edit_proposal_dialog(p)
+            if c3.button("🗑️", key=f"del_p_{p}"): confirm_delete_dialog("proposals", "title", p)
 
 # --- TAB 2: EVALUATORS ---
 with tab2:
+    st.subheader("Add New Evaluator")
+    with st.form("eval_add_form", clear_on_submit=True):
+        e_name_in = st.text_input("Evaluator Name")
+        e_photo_in = st.file_uploader("Photo", type=['png', 'jpg', 'jpeg'])
+        if st.form_submit_button("Add Evaluator"):
+            if e_name_in:
+                add_item_sql("evaluators", "name", e_name_in)
+                if e_photo_in:
+                    file_path = f"{e_name_in.strip().replace(' ', '_')}.png"
+                    supabase.storage.from_(BUCKET_NAME).upload(
+                        path=file_path, file=e_photo_in.getvalue(),
+                        file_options={"content-type": "image/png", "x-upsert": "true"}
+                    )
+                st.rerun()
+
     evals = get_items_sql("evaluators", "name")
     with st.expander(f"🔍 View/Edit Evaluators ({len(evals)})"):
         search_e = st.text_input("Filter Evaluators...")
@@ -129,41 +151,17 @@ with tab2:
             img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
             c1.image(img_url, width=40)
             c2.write(e)
-            if c3.button("✏️", key=f"edit_e_{e}"):
-                edit_evaluator_dialog(e)
-            if c4.button("🗑️", key=f"del_e_{e}"):
-                confirm_delete_item("evaluators", "name", e)
-                if e_photo:
-                    file_path = f"{e_name.strip().replace(' ', '_')}.png"
-                    supabase.storage.from_(BUCKET_NAME).upload(
-                        path=file_path, file=e_photo.getvalue(),
-                        file_options={"content-type": "image/png", "x-upsert": "true"}
-                    )
-                st.rerun()
-
-    evals = get_items_sql("evaluators", "name")
-    cache_buster = int(time.time())
-    
-    with st.expander(f"🔍 View/Search Evaluators ({len(evals)})"):
-        search_e = st.text_input("Filter Evaluators...")
-        for e in [x for x in evals if search_e.lower() in x.lower()]:
-            c1, c2, c3 = st.columns([1, 5, 1])
-            img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
-            c1.image(img_url, width=40)
-            c2.write(e)
-            if c3.button("🗑️", key=f"del_e_{e}"):
-                confirm_delete_item("evaluators", "name", e)
-        if evals:
-            if st.button("🚨 Clear All Evaluators"): confirm_clear_table("evaluators", "Evaluators")
+            if c3.button("✏️", key=f"edit_e_{e}"): edit_evaluator_dialog(e)
+            if c4.button("🗑️", key=f"del_e_{e}"): confirm_delete_dialog("evaluators", "name", e)
 
 # --- TAB 3: LINKS ---
 with tab3:
     st.subheader("Personalized Access Links")
-    if evals:
+    evals_list = get_items_sql("evaluators", "name")
+    if evals_list:
         base_url = st.text_input("Base URL", value="https://your-app.streamlit.app").rstrip('/')
-        link_data = [{"Evaluator": n, "Link": f"{base_url}/?user={i}"} for i, n in enumerate(evals)]
+        link_data = [{"Evaluator": n, "Link": f"{base_url}/?user={i}"} for i, n in enumerate(evals_list)]
         st.dataframe(pd.DataFrame(link_data), use_container_width=True, hide_index=True)
-        
         copy_block = "\n".join([f"👤 {d['Evaluator']}: {d['Link']}" for d in link_data])
         st.text_area("Copy-Paste Block", value=copy_block, height=150)
 
@@ -182,7 +180,6 @@ if not df.empty:
         st.table(df[numeric_cols].mean().round(2).rename("Global Avg"))
         st.dataframe(df, use_container_width=True)
 
-# Participation Grid
 evals_all = get_items_sql("evaluators", "name")
 unique_submitted = df['evaluator'].unique().tolist() if not df.empty else []
 
@@ -206,35 +203,25 @@ if evals_all:
                     <p style="font-size:0.8em; margin:0; color:#666;">{'✅ DONE' if is_done else '⌛ WAITING'}</p>
                 </div>
             """, unsafe_allow_html=True)
-            # --- 7. SESSION CONTROL (Archive & Reset) ---
+
+# --- 7. SESSION CONTROL (Archive & Reset) ---
 st.divider()
 st.header("🚀 Session Control")
 
-# Archive logic for Cloud SQL
 force_mode = st.toggle("⚠️ Enable Force Archive")
 total_evals_count = len(evals_all)
 count_submitted = len(unique_submitted)
-
-# Archive allowed if everyone is done OR force mode is on
 can_archive = (count_submitted >= total_evals_count and total_evals_count > 0) or force_mode
 
 if st.button("🆕 Archive & Reset Dashboard", type="primary", use_container_width=True, disabled=not can_archive):
     try:
         with conn.session as s:
-            # 1. Copy current scores to history table
-            s.execute(text("""
-                INSERT INTO scores_history 
-                SELECT *, NOW() as archive_timestamp FROM scores;
-            """))
-            # 2. Clear the active scores table
+            s.execute(text("INSERT INTO scores_history SELECT *, NOW() as archive_timestamp FROM scores;"))
             s.execute(text("TRUNCATE TABLE scores CASCADE;"))
             s.commit()
-            
         st.balloons()
-        st.success("Current session archived to 'scores_history' and dashboard reset!")
+        st.success("Session archived and reset!")
         time.sleep(2)
         st.rerun()
     except Exception as e:
-        st.error(f"Archive failed: {e}. Ensure a 'scores_history' table exists in your database.")
-
-
+        st.error(f"Archive failed: {e}")

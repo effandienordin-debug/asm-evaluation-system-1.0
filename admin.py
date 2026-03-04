@@ -11,48 +11,44 @@ from streamlit_autorefresh import st_autorefresh
 # --- 1. CONFIG & CONNECTIONS ---
 st.set_page_config(page_title="ASM Admin Panel", layout="wide")
 
+# Securely pull from Streamlit Secrets
+SUPABASE_URL = st.secrets["supabase_url"]
+SUPABASE_KEY = st.secrets["supabase_key"]
+BUCKET_NAME = "evaluator-photos"
+
 # --- 2. LOGIN LOGIC ---
 def check_password():
     """Returns True if the user had the correct password."""
     def password_entered():
-        # Change 'admin_password' to whatever you want your password to be
-        # Or better: st.secrets["password"] if using Streamlit Cloud
-        if st.session_state["password"] == "admin123": 
+        # Pulled from secrets to keep code clean
+        if st.session_state["password"] == st.secrets["password"]: 
             st.session_state["password_correct"] = True
-            del st.session_state["password"]  # don't store password
+            del st.session_state["password"] 
         else:
             st.session_state["password_correct"] = False
 
     if "password_correct" not in st.session_state:
-        # First run, show input for password
         st.title("🛡️ ASM Admin Login")
         st.text_input("Password", type="password", on_change=password_entered, key="password")
         return False
     elif not st.session_state["password_correct"]:
-        # Password not correct, show input + error
         st.title("🛡️ ASM Admin Login")
         st.text_input("Password", type="password", on_change=password_entered, key="password")
         st.error("😕 Password incorrect")
         return False
     else:
-        # Password correct.
         return True
 
 if not check_password():
-    st.stop()  # Do not run the rest of the app if not logged in
+    st.stop() 
 
-# --- 3. THE REST OF YOUR APP (Only runs if logged in) ---
-
-# Supabase Credentials
-SUPABASE_URL = "https://qizxricvzsnsfjibfmxw.supabase.co"
-SUPABASE_KEY = "sb_publishable_bWcVZlRASQwMaUCtgklX3Q_yaCUAfxO"
-BUCKET_NAME = "evaluator-photos"
-
+# --- 3. INITIALIZE CLIENTS ---
 try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
     st.error("Supabase Connection Error.")
 
+# Automatically uses [connections.postgresql] from secrets
 conn = st.connection("postgresql", type="sql")
 
 # --- 4. FORCED WHITE THEME CSS ---
@@ -71,7 +67,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 5. DIALOGS (Same as before) ---
+# --- 5. DIALOGS ---
 @st.dialog("✏️ Edit Proposal")
 def edit_proposal_dialog(old_val):
     new_val = st.text_input("Edit Proposal Title", value=old_val)
@@ -129,7 +125,6 @@ cache_buster = int(time.time())
 with st.sidebar:
     st.title("🛡️ ASM Admin")
     
-    # Logout Button
     if st.button("🚪 Logout"):
         st.session_state["password_correct"] = False
         st.rerun()

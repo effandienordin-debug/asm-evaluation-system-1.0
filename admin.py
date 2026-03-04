@@ -236,6 +236,10 @@ elif menu_choice == "👤 Evaluators & Links":
             if st.form_submit_button("Create"):
                 if e_name:
                     add_item_sql("evaluators", "name", e_name)
+                    # Initialize the submitted flag to False for new users
+                    with conn.session as s:
+                        s.execute(text("UPDATE evaluators SET has_submitted = FALSE WHERE name = :n"), {"n": e_name.strip()})
+                        s.commit()
                     if e_file:
                         path = f"{e_name.strip().replace(' ', '_')}.png"
                         supabase.storage.from_(BUCKET_NAME).upload(path=path, file=e_file.getvalue(), file_options={"content-type": "image/png", "x-upsert": "true"})
@@ -260,29 +264,49 @@ elif menu_choice == "👤 Evaluators & Links":
                     img.save(buf, format="PNG")
                     with qr_cols[idx % 3]:
                         st.image(buf.getvalue(), caption=d['Name'], use_container_width=True)
-
-            if st.button("📋 Show Links for Copying"):
-                st.info("Columns are separated. Copy the column you need.")
-                c_n, c_l = st.columns(2)
-                with c_n:
-                    st.caption("Names")
-                    st.code("\n".join([d['Name'] for d in link_data]))
-                with c_l:
-                    st.caption("Clean Links (Copy these)")
-                    st.code("\n".join([d['Link'] for d in link_data]))
         else:
             st.info("Add evaluators to generate links.")
 
     st.divider()
-    st.subheader("Manage Existing Evaluators")
+    st.subheader("Manage Access & Status")
+    
+    # Fetch status directly to ensure it's live
+    try:
+        status_df = conn.query("SELECT name, has_submitted FROM evaluators;", ttl=0)
+    except:
+        status_df = pd.DataFrame()
+
     for e in evals_all:
-        c1, c2, c3, c4 = st.columns([1, 4, 1, 1])
+        # Determine current lock status
+        is_locked = False
+        if not status_df.empty:
+            match = status_df[status_df['name'] == e]
+            if not match.empty:
+                is_locked = bool(match.iloc[0]['has_submitted'])
+
+        c1, c2, c3, c4, c5 = st.columns([1, 3, 1, 1, 2])
         img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
+        
         c1.image(img_url, width=40)
-        c2.write(e)
+        
+        # Display status indicator
+        status_text = "🔒 SUBMITTED" if is_locked else "🔓 ACTIVE"
+        c2.write(f"**{e}** \n*{status_text}*")
+        
         if c3.button("✏️", key=f"edit_e_{e}"): edit_evaluator_dialog(e)
         if c4.button("🗑️", key=f"del_e_{e}"): confirm_delete_dialog("evaluators", "name", e)
-
+        
+        # The Reset Access Button (One-Time Password Logic)
+        if is_locked:
+            if c5.button("Reset Access", key=f"reset_{e}", type="secondary", use_container_width=True):
+                with conn.session as s:
+                    s.execute(text("UPDATE evaluators SET has_submitted = FALSE WHERE name = :n"), {"n": e})
+                    s.commit()
+                st.toast(f"Access reset for {e}")
+                time.sleep(1)
+                st.rerun()
+        else:
+            c5.button("In Progress", key=f"prog_{e}", disabled=True, use_container_width=True)
 elif menu_choice == "📜 History":
     st.header("📜 Historical Sessions")
     try:
@@ -305,4 +329,5 @@ elif menu_choice == "📜 History":
                 st.rerun()
     else:
         st.info("No data in archive.")
+
 

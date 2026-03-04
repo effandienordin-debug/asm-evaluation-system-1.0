@@ -10,9 +10,9 @@ from streamlit_autorefresh import st_autorefresh
 st.set_page_config(page_title="ASM Admin Panel", layout="wide")
 
 # Replace with your actual Supabase Credentials
-SUPABASE_URL = https://qizxricvzsnsfjibfmxw.supabase.co
-SUPABASE_KEY = sb_publishable_bWcVZlRASQwMaUCtgklX3Q_yaCUAfxO
-BUCKET_NAME = evaluator-photos
+SUPABASE_URL = "https://qizxricvzsnsfjibfmxw.supabase.co"
+SUPABASE_KEY = "sb_publishable_bWcVZlRASQwMaUCtgklX3Q_yaCUAfxO"
+BUCKET_NAME = "evaluator-photos"
 
 try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -225,4 +225,5 @@ if st.button("🆕 Archive & Reset Dashboard", type="primary", use_container_wid
         st.rerun()
     except Exception as e:
         st.error(f"Archive failed: {e}")
+
 

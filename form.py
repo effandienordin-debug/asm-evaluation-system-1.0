@@ -19,41 +19,83 @@ st.set_page_config(page_title="ASM Evaluator Entry", layout="centered")
 # --- 2. DATABASE CONNECTION ---
 conn = st.connection("postgresql", type="sql")
 
-# --- 3. HELPER FUNCTIONS ---
+# --- 3. LOGIN LOGIC (PASSWORD PROTECTION) ---
+def check_password():
+    """Returns True if the user had the correct password."""
+    def password_entered():
+        if st.session_state["password"] == st.secrets["password"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"] 
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.title("🔐 ASM Secure Access")
+        st.text_input("Please enter the access password", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        st.title("🔐 ASM Secure Access")
+        st.text_input("Please enter the access password", type="password", on_change=password_entered, key="password")
+        st.error("😕 Password incorrect")
+        return False
+    return True
+
+if not check_password():
+    st.stop()
+
+# --- 4. HELPER FUNCTIONS ---
 def get_cloud_list(table, column):
     try:
-        # Using a raw string here prevents hashing errors
         df = conn.query(f"SELECT {column} FROM {table} ORDER BY {column} ASC;", ttl=0)
         return df[column].tolist() if not df.empty else []
     except:
         return []
 
-# --- 4. AUTO-REFRESH ---
+# --- 5. AUTO-REFRESH ---
 st_autorefresh(interval=30000, key="evaluator_heartbeat")
 
 EVALUATORS = get_cloud_list("evaluators", "name")
 PROPOSALS = get_cloud_list("proposals", "title")
 
-# --- 5. USER IDENTIFICATION ---
-user_id = st.query_params.get("user")
-if user_id is None or not EVALUATORS:
+# --- 6. USER IDENTIFICATION & SUBMISSION CHECK ---
+user_param = st.query_params.get("user")
+
+if user_param is None or not EVALUATORS:
     st.warning("⚠️ Access Denied. Please use your personalized link.")
     st.stop()
 
-try:
-    current_user = EVALUATORS[int(user_id)]
-except:
-    st.error("Invalid User ID.")
+# Support both Index IDs and Nicknames
+current_user = None
+if user_param.isdigit():
+    idx = int(user_param)
+    if idx < len(EVALUATORS):
+        current_user = EVALUATORS[idx]
+else:
+    if user_param in EVALUATORS:
+        current_user = user_param
+
+if not current_user:
+    st.error("Invalid User Identification.")
     st.stop()
 
-# --- 6. HEADER WITH PHOTO & CACHE BUSTER ---
-cache_buster = int(datetime.now().timestamp())
+# --- ONE-TIME SUBMISSION CHECK ---
+# We check if the user has a "submitted" flag in the evaluators table
+try:
+    status_query = "SELECT has_submitted FROM evaluators WHERE name = :name LIMIT 1;"
+    df_status = conn.query(status_query, params={"name": current_user}, ttl=0)
+    if not df_status.empty and df_status.iloc[0]['has_submitted']:
+        st.warning(f"Hello {current_user}, your evaluation session has already been completed and locked.")
+        st.info("Please contact the Administrator if you need to revise your entries.")
+        st.stop()
+except:
+    pass # Column might not exist yet
 
+# --- 7. HEADER WITH PHOTO ---
+cache_buster = int(datetime.now().timestamp())
 col_img, col_txt = st.columns([1, 4])
 with col_img:
     clean_name = current_user.replace(' ', '_')
     img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{clean_name}.png?t={cache_buster}"
-    
     st.markdown(f"""
         <div style="text-align: center;">
             <img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; border: 3px solid #1E3A8A;" 
@@ -65,11 +107,10 @@ with col_txt:
     st.title(f"Welcome, {current_user}")
     st.write("Official ASM Evaluation Portal")
 
-# --- 7. MAIN FORM LOGIC ---
+# --- 8. MAIN FORM LOGIC ---
 selected_proposal = st.selectbox("Select Proposal Title", ["-- Select --"] + PROPOSALS)
 
 if selected_proposal != "-- Select --":
-    # FIX: Use a raw string instead of text() to avoid UnhashableParamError
     query = "SELECT * FROM scores WHERE evaluator = :ev AND proposal_title = :prop LIMIT 1;"
     df_match = conn.query(query, params={"ev": current_user, "prop": selected_proposal}, ttl=0)
     existing_data = df_match.iloc[0] if not df_match.empty else None
@@ -77,20 +118,16 @@ if selected_proposal != "-- Select --":
     if "is_editing" not in st.session_state:
         st.session_state.is_editing = False
 
-    # VIEW MODE
     if existing_data is not None and not st.session_state.is_editing:
         st.success(f"✅ Record found for: {selected_proposal}")
         st.metric("Your Total Score", f"{existing_data['total']} / 5.0")
         if st.button("✏️ Edit Scores", use_container_width=True):
             st.session_state.is_editing = True
             st.rerun()
-            
-    # FORM MODE
     else:
         with st.form("evaluation_form", clear_on_submit=False):
             st.info("ℹ️ **Flexible Scoring**: Leave at 0.0 if a criterion is not applicable.")
             inputs = {}
-            
             for name, weight in CRITERIA:
                 col_db = name.lower().replace(" ", "_")
                 d_val = float(existing_data[col_db]) if (existing_data is not None) else 0.0
@@ -117,7 +154,7 @@ if selected_proposal != "-- Select --":
                 final_total = round(w_sum / w_used, 2) if w_used > 0 else 0.0
 
                 with conn.session as s:
-                    # Note: text() is still required for s.execute operations
+                    # 1. Save the score
                     save_query = text("""
                         INSERT INTO scores (
                             evaluator, proposal_title, strategic_alignment, potential_impact, 
@@ -144,6 +181,11 @@ if selected_proposal != "-- Select --":
                         "s5": inputs['Timeline Readiness'], "s6": inputs['Execution Strategy'],
                         "tot": final_total, "rec": recom, "comm": user_comments, "ts": datetime.now()
                     })
+                    
+                    # 2. OPTIONAL: Lock the user for one-time submission
+                    # Uncomment the lines below if you want them locked out after ONE submission total
+                    # s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
+                    
                     s.commit()
                 
                 st.session_state.is_editing = False

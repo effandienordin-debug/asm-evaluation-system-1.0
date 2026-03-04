@@ -135,17 +135,14 @@ st.write(f"**Overall Progress: {done_count} / {total_count} Proposals Evaluated*
 st.progress(done_count / total_count if total_count > 0 else 0)
 st.divider()
 
-# --- 11. CLICKABLE TABLE LOGIC (Update for direct edit) ---
+# --- 11. CLICKABLE TABLE LOGIC ---
 if "summary_table" in st.session_state:
     selection = st.session_state.summary_table.get("selection", {}).get("rows", [])
     if selection:
         selected_row_index = selection[0]
         clicked_prop = scored_df.iloc[selected_row_index]["proposal_title"]
-        
-        # Directly set state to skip the summary page
         st.session_state.proposal_selector = clicked_prop
         st.session_state.is_editing = True 
-        
         st.session_state.summary_table["selection"]["rows"] = []
         st.rerun()
 
@@ -166,7 +163,6 @@ if selected_proposal != "-- Select --":
     if "is_editing" not in st.session_state:
         st.session_state.is_editing = False
 
-    # Logic: Show Result page ONLY if data exists AND we didn't force "is_editing" via table click
     if existing_data is not None and not st.session_state.is_editing:
         st.success(f"✅ Record found for: {selected_proposal}")
         st.metric("Your Total Score", f"{existing_data['total']} / 5.0")
@@ -177,25 +173,36 @@ if selected_proposal != "-- Select --":
         with col_back:
             st.button("⬅️ Back to Summary", use_container_width=True, on_click=nav_to_summary)
     else:
+        # --- RENDER FORM ---
         with st.form("evaluation_form"):
-            st.subheader(f"Evaluation Form: {selected_proposal}")
-            st.info("ℹ️ Drafts are saved automatically while you stay on this page.")
+            st.subheader(f"Evaluation: {selected_proposal}")
+            
+            # --- PROGRESS RING LOGIC ---
             inputs = {}
+            criteria_met = 0
             for name, weight in CRITERIA:
                 col_db = name.lower().replace(" ", "_")
-                # Load existing DB value or session draft
                 default_val = float(existing_data[col_db]) if existing_data is not None else 0.0
                 saved_val = st.session_state.get(f"{draft_key}_{col_db}", default_val)
                 inputs[name] = st.number_input(f"{name} ({int(weight*100)}%)", 0.0, 5.0, saved_val, 0.1)
+                if inputs[name] > 0: criteria_met += 1
             
+            # Progress calculation
+            form_progress = criteria_met / len(CRITERIA)
+            st.write(f"Criteria Completed: {criteria_met}/{len(CRITERIA)}")
+            st.progress(form_progress)
+
             default_comm = str(existing_data['comments']) if existing_data is not None else ""
             saved_comm = st.session_state.get(f"{draft_key}_comm", default_comm)
             user_comments = st.text_area("Comments / Remarks", value=saved_comm)
             
+            # --- DRAFT SAVED INDICATOR ---
+            if st.session_state.get(f"{draft_key}_dirty", False):
+                st.caption("🟢 Changes detected in draft (Autosaved to session)")
+            
             default_recom = str(existing_data['recommendation']) if existing_data is not None else "Pending"
             recom = st.radio("Recommendation", ["Pending", "Approve", "Revise", "Reject"], 
-                             index=["Pending", "Approve", "Revise", "Reject"].index(default_recom),
-                             horizontal=True)
+                             index=["Pending", "Approve", "Revise", "Reject"].index(default_recom), horizontal=True)
             
             col_sub, col_can = st.columns(2)
             with col_sub:
@@ -212,21 +219,13 @@ if selected_proposal != "-- Select --":
                     s.execute(text("""INSERT INTO scores (evaluator, proposal_title, strategic_alignment, potential_impact, feasibility, budget_justification, timeline_readiness, execution_strategy, total, recommendation, comments, last_updated)
                                       VALUES (:ev, :prop, :s1, :s2, :s3, :s4, :s5, :s6, :tot, :rec, :comm, :ts)
                                       ON CONFLICT (evaluator, proposal_title) DO UPDATE SET 
-                                      strategic_alignment=EXCLUDED.strategic_alignment, 
-                                      potential_impact=EXCLUDED.potential_impact,
-                                      feasibility=EXCLUDED.feasibility,
-                                      budget_justification=EXCLUDED.budget_justification,
-                                      timeline_readiness=EXCLUDED.timeline_readiness,
-                                      execution_strategy=EXCLUDED.execution_strategy,
-                                      total=EXCLUDED.total, 
-                                      recommendation=EXCLUDED.recommendation, 
-                                      comments=EXCLUDED.comments, 
-                                      last_updated=EXCLUDED.last_updated"""),
-                              {"ev": current_user, "prop": selected_proposal, 
-                               "s1": inputs['Strategic Alignment'], "s2": inputs['Potential Impact'], 
-                               "s3": inputs['Feasibility'], "s4": inputs['Budget Justification'], 
-                               "s5": inputs['Timeline Readiness'], "s6": inputs['Execution Strategy'], 
-                               "tot": final_total, "rec": recom, "comm": user_comments, "ts": datetime.now()})
+                                      strategic_alignment=EXCLUDED.strategic_alignment, potential_impact=EXCLUDED.potential_impact,
+                                      feasibility=EXCLUDED.feasibility, budget_justification=EXCLUDED.budget_justification,
+                                      timeline_readiness=EXCLUDED.timeline_readiness, execution_strategy=EXCLUDED.execution_strategy,
+                                      total=EXCLUDED.total, recommendation=EXCLUDED.recommendation, comments=EXCLUDED.comments, last_updated=EXCLUDED.last_updated"""),
+                              {"ev": current_user, "prop": selected_proposal, "s1": inputs['Strategic Alignment'], "s2": inputs['Potential Impact'], 
+                               "s3": inputs['Feasibility'], "s4": inputs['Budget Justification'], "s5": inputs['Timeline Readiness'], 
+                               "s6": inputs['Execution Strategy'], "tot": final_total, "rec": recom, "comm": user_comments, "ts": datetime.now()})
                     s.commit()
                 
                 st.session_state.pending_nav = True
@@ -238,9 +237,16 @@ if selected_proposal != "-- Select --":
                 st.session_state.pending_nav = True
                 st.rerun()
 
+        # Update draft state and set "dirty" flag for indicator
         for name, _ in CRITERIA:
-            st.session_state[f"{draft_key}_{name.lower().replace(' ', '_')}"] = inputs[name]
-        st.session_state[f"{draft_key}_comm"] = user_comments
+            key = f"{draft_key}_{name.lower().replace(' ', '_')}"
+            if st.session_state.get(key) != inputs[name]:
+                st.session_state[key] = inputs[name]
+                st.session_state[f"{draft_key}_dirty"] = True
+        
+        if st.session_state.get(f"{draft_key}_comm") != user_comments:
+            st.session_state[f"{draft_key}_comm"] = user_comments
+            st.session_state[f"{draft_key}_dirty"] = True
 
 else:
     # --- 13. SUMMARY DASHBOARD ---
@@ -248,20 +254,8 @@ else:
     st.info("💡 Click a row in the table below to edit that proposal.")
     
     if not scored_df.empty:
-        summary_display = scored_df.rename(columns={
-            "proposal_title": "Proposal Name",
-            "total": "Score",
-            "comments": "Remarks"
-        })
-        
-        st.dataframe(
-            summary_display,
-            use_container_width=True,
-            hide_index=True,
-            on_select="rerun",
-            selection_mode="single-row",
-            key="summary_table"
-        )
+        summary_display = scored_df.rename(columns={"proposal_title": "Proposal Name", "total": "Score", "comments": "Remarks"})
+        st.dataframe(summary_display, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", key="summary_table")
     else:
         st.info("No proposals evaluated yet.")
 
@@ -276,7 +270,6 @@ else:
     if all_done:
         st.divider()
         st.subheader("🏁 Finish Evaluation")
-        st.success("All proposals complete. Finalize to lock your session.")
         if st.button("Finalize and Close Session", type="primary", use_container_width=True):
             with conn.session as s:
                 s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})

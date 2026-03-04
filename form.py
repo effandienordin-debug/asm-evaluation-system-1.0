@@ -190,16 +190,23 @@ if selected_proposal != "-- Select --":
             st.progress(form_progress)
 
             default_comm = str(existing_data['comments']) if existing_data is not None else ""
-            saved_comm = st.session_state.get(f"{draft_key}_comm", default_comm)
-            user_comments = st.text_area("Comments / Remarks", value=saved_comm)
+            if "[MERGE WITH:" in default_comm:
+                # Strip the previous merge tag for the text area so it doesn't duplicate
+                default_comm = default_comm.split("] ", 1)[-1]
             
-            if st.session_state.get(f"{draft_key}_dirty", False):
-                st.caption("🟢 Changes detected in draft")
+            user_comments = st.text_area("Comments / Remarks", value=default_comm)
             
-            default_recom = str(existing_data['recommendation']) if existing_data is not None else "Pending"
-            recom = st.radio("Recommendation", ["Pending", "Approve", "Revise", "Reject"], 
-                             index=["Pending", "Approve", "Revise", "Reject"].index(default_recom), horizontal=True)
+            recom_options = ["Pending", "Approve", "Revise", "Reject", "Combine/Merge"]
+            current_rec = str(existing_data['recommendation']) if existing_data is not None else "Pending"
+            recom = st.radio("Recommendation", recom_options, 
+                             index=recom_options.index(current_rec) if current_rec in recom_options else 0, 
+                             horizontal=True)
             
+            merge_target = None
+            if recom == "Combine/Merge":
+                other_proposals = [p for p in PROPOSALS if p != selected_proposal]
+                merge_target = st.selectbox("Combine with which proposal?", other_proposals)
+
             col_sub, col_can = st.columns(2)
             with col_sub:
                 submit = st.form_submit_button("📤 Submit Evaluation", use_container_width=True, type="primary")
@@ -211,6 +218,10 @@ if selected_proposal != "-- Select --":
                 w_used = sum(weight for name, weight in CRITERIA if inputs[name] > 0)
                 final_total = round(w_sum / w_used, 2) if w_used > 0 else 0.0
 
+                final_comments = user_comments
+                if recom == "Combine/Merge" and merge_target:
+                    final_comments = f"[MERGE WITH: {merge_target}] {user_comments}"
+
                 with conn.session as s:
                     s.execute(text("""INSERT INTO scores (evaluator, proposal_title, strategic_alignment, potential_impact, feasibility, budget_justification, timeline_readiness, execution_strategy, total, recommendation, comments, last_updated)
                                       VALUES (:ev, :prop, :s1, :s2, :s3, :s4, :s5, :s6, :tot, :rec, :comm, :ts)
@@ -221,43 +232,41 @@ if selected_proposal != "-- Select --":
                                       total=EXCLUDED.total, recommendation=EXCLUDED.recommendation, comments=EXCLUDED.comments, last_updated=EXCLUDED.last_updated"""),
                               {"ev": current_user, "prop": selected_proposal, "s1": inputs['Strategic Alignment'], "s2": inputs['Potential Impact'], 
                                "s3": inputs['Feasibility'], "s4": inputs['Budget Justification'], "s5": inputs['Timeline Readiness'], 
-                               "s6": inputs['Execution Strategy'], "tot": final_total, "rec": recom, "comm": user_comments, "ts": datetime.now()})
+                               "s6": inputs['Execution Strategy'], "tot": final_total, "rec": recom, "comm": final_comments, "ts": datetime.now()})
                     s.commit()
                 
                 st.session_state.pending_nav = True
                 st.success("Evaluation Saved!")
                 time.sleep(1)
                 st.rerun()
-            
-            if cancel:
-                st.session_state.pending_nav = True
-                st.rerun()
-
-        for name, _ in CRITERIA:
-            key = f"{draft_key}_{name.lower().replace(' ', '_')}"
-            if st.session_state.get(key) != inputs[name]:
-                st.session_state[key] = inputs[name]
-                st.session_state[f"{draft_key}_dirty"] = True
-        
-        if st.session_state.get(f"{draft_key}_comm") != user_comments:
-            st.session_state[f"{draft_key}_comm"] = user_comments
-            st.session_state[f"{draft_key}_dirty"] = True
 
 else:
     # --- 13. SUMMARY DASHBOARD ---
     st.subheader("📊 Your Evaluation Summary")
-    st.info("💡 Click a row in the table below to edit that proposal.")
     
     if not scored_df.empty:
         summary_display = scored_df.copy()
+
+        # Emoji logic for immediate visual identification
+        def get_status_icon(rec):
+            if rec == "Approve": return "🟢 Approve"
+            if rec == "Reject": return "🔴 Reject"
+            if rec == "Revise": return "🟡 Revise"
+            if rec == "Combine/Merge": return "🔵 MERGE"
+            return "⚪ Pending"
+
+        summary_display["Status"] = summary_display["recommendation"].apply(get_status_icon)
+        
         summary_display = summary_display.rename(columns={
             "proposal_title": "Proposal Name", 
             "total": "Score", 
-            "recommendation": "Recommendation",
             "comments": "Remarks"
         })
 
-        # Progress bar column provides the "Darker/Color" effect you wanted for high scores
+        # Reorder to highlight Status
+        display_cols = ["Status", "Proposal Name", "Score", "Remarks"]
+        summary_display = summary_display[display_cols]
+
         st.dataframe(
             summary_display, 
             use_container_width=True, 
@@ -266,15 +275,15 @@ else:
             selection_mode="single-row", 
             key="summary_table",
             column_config={
+                "Status": st.column_config.TextColumn(width="small"),
                 "Score": st.column_config.ProgressColumn(
                     "Score",
                     format="%.1f",
                     min_value=0,
                     max_value=5,
                 ),
-                "Remarks": st.column_config.TextColumn(width="large"), # wrap_text removed to fix TypeError
+                "Remarks": st.column_config.TextColumn(width="large"),
                 "Proposal Name": st.column_config.TextColumn(width="medium"),
-                "Recommendation": st.column_config.TextColumn(width="small"),
             }
         )
     else:

@@ -56,23 +56,30 @@ def edit_evaluator_dialog(old_name):
     new_photo = st.file_uploader("Update Photo (Optional)", type=['png', 'jpg', 'jpeg'])
     
     if st.button("Save Changes", type="primary"):
+        clean_new_name = new_name.strip()
+        
         with conn.session as s:
-            # 1. Update database names
+            # 1. Update database names in evaluators and scores tables
             s.execute(text("UPDATE evaluators SET name = :new WHERE name = :old"), 
-                      {"new": new_name.strip(), "old": old_name})
+                      {"new": clean_new_name, "old": old_name})
             s.execute(text("UPDATE scores SET evaluator = :new WHERE evaluator = :old"), 
-                      {"new": new_name.strip(), "old": old_name})
+                      {"new": clean_new_name, "old": old_name})
             s.commit()
         
-        # 2. Update Photo if a new one was uploaded
+        # 2. Handle Photo Update
         if new_photo:
-            file_path = f"{new_name.strip().replace(' ', '_')}.png"
-            supabase.storage.from_(BUCKET_NAME).upload(
-                path=file_path, file=new_photo.getvalue(),
-                file_options={"content-type": "image/png", "x-upsert": "true"}
-            )
+            file_path = f"{clean_new_name.replace(' ', '_')}.png"
+            try:
+                supabase.storage.from_(BUCKET_NAME).upload(
+                    path=file_path, 
+                    file=new_photo.getvalue(),
+                    file_options={"content-type": "image/png", "x-upsert": "true"} # CRITICAL: Allows overwriting
+                )
+                st.toast("📷 Photo updated successfully!")
+            except Exception as e:
+                st.error(f"Photo upload failed: {e}")
         
-        st.success(f"Updated {new_name}!")
+        st.success(f"Updated {clean_new_name}!")
         time.sleep(1)
         st.rerun()
 
@@ -150,18 +157,20 @@ with tab2:
         e_name_in = st.text_input("Evaluator Name")
         e_photo_in = st.file_uploader("Photo", type=['png', 'jpg', 'jpeg'])
         
-        # Line 152: The "if" statement
         if st.form_submit_button("Add Evaluator"):
-            # Line 153 and below MUST be indented further right
             if e_name_in:
-                add_item_sql("evaluators", "name", e_name_in)
+                clean_name = e_name_in.strip()
+                add_item_sql("evaluators", "name", clean_name)
+                
                 if e_photo_in:
-                    file_path = f"{e_name_in.strip().replace(' ', '_')}.png"
+                    file_path = f"{clean_name.replace(' ', '_')}.png"
                     supabase.storage.from_(BUCKET_NAME).upload(
-                        path=file_path, file=e_photo_in.getvalue(),
+                        path=file_path, 
+                        file=e_photo_in.getvalue(),
                         file_options={"content-type": "image/png", "x-upsert": "true"}
                     )
-                st.toast(f"✅ Evaluator '{e_name_in}' added!")
+                
+                st.toast(f"✅ {clean_name} added to the system!") # Pop-up notification
                 time.sleep(1)
                 st.rerun()
 
@@ -247,6 +256,7 @@ if st.button("🆕 Archive & Reset Dashboard", type="primary", use_container_wid
         st.rerun()
     except Exception as e:
         st.error(f"Archive failed: {e}")
+
 
 
 

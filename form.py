@@ -249,20 +249,26 @@ else:
     st.info("💡 Click a row in the table below to edit that proposal.")
     
     if not scored_df.empty:
+        # Prepare display copy
         summary_display = scored_df.copy()
-        # Format score as "X / 5.0"
-        summary_display['total'] = summary_display['total'].apply(lambda x: f"{x} / 5.0")
         
-        summary_display = summary_display.rename(columns={
+        # Define Rename Map
+        rename_dict = {
             "proposal_title": "Proposal Name", 
             "total": "Score", 
             "recommendation": "Recommendation",
             "comments": "Remarks"
-        })
+        }
+        summary_display = summary_display.rename(columns=rename_dict)
         
-        # FIXED CONFIGURATION
+        # Apply Styling to raw numeric 'Score' column before formatting to string
+        # This creates a background gradient (light green to dark green)
+        styled_df = summary_display.style.background_gradient(
+            cmap="Greens", subset=["Score"], vmin=0, vmax=5
+        ).format({"Score": "{:.1f} / 5.0"})
+
         st.dataframe(
-            summary_display, 
+            styled_df, 
             use_container_width=True, 
             hide_index=True, 
             on_select="rerun", 
@@ -302,4 +308,3 @@ else:
     else:
         st.divider()
         st.info(f"💡 Complete the **{len(remaining)}** remaining proposal(s) to finalize.")
-

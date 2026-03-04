@@ -58,7 +58,6 @@ def get_cloud_list(table, column):
         return []
 
 st_autorefresh(interval=30000, key="evaluator_heartbeat")
-
 EVALUATORS = get_cloud_list("evaluators", "name")
 PROPOSALS = get_cloud_list("proposals", "title")
 
@@ -110,16 +109,16 @@ except:
 
 total_count = len(PROPOSALS)
 done_count = len(completed_proposals)
-progress_val = done_count / total_count if total_count > 0 else 0
-
 st.write(f"**Overall Progress: {done_count} / {total_count} Proposals Evaluated**")
-st.progress(progress_val)
+st.progress(done_count / total_count if total_count > 0 else 0)
 st.divider()
 
-# --- 9. EVALUATION FORM ---
+# --- 9. EVALUATION FORM & AUTO-SAVE LOGIC ---
 selected_proposal = st.selectbox("Select Proposal Title", ["-- Select --"] + PROPOSALS)
 
 if selected_proposal != "-- Select --":
+    draft_key = f"draft_{current_user}_{selected_proposal}"
+    
     query = "SELECT * FROM scores WHERE evaluator = :ev AND proposal_title = :prop LIMIT 1;"
     df_match = conn.query(query, params={"ev": current_user, "prop": selected_proposal}, ttl=0)
     existing_data = df_match.iloc[0] if not df_match.empty else None
@@ -141,19 +140,18 @@ if selected_proposal != "-- Select --":
                 st.rerun()
     else:
         with st.form("evaluation_form"):
-            st.info("ℹ️ **Flexible Scoring**: Leave at 0.0 if a criterion is not applicable.")
+            st.info("ℹ️ Drafts are saved automatically while you stay on this page.")
             inputs = {}
             for name, weight in CRITERIA:
                 col_db = name.lower().replace(" ", "_")
-                d_val = float(existing_data[col_db]) if (existing_data is not None) else 0.0
-                inputs[name] = st.number_input(f"{name} ({int(weight*100)}%)", 0.0, 5.0, d_val, 0.1)
+                saved_val = st.session_state.get(f"{draft_key}_{col_db}", float(existing_data[col_db]) if existing_data is not None else 0.0)
+                inputs[name] = st.number_input(f"{name} ({int(weight*100)}%)", 0.0, 5.0, saved_val, 0.1, key=f"input_{col_db}")
             
-            d_comm = str(existing_data['comments']) if (existing_data is not None) else ""
-            user_comments = st.text_area("Comments / Remarks", value=d_comm)
+            saved_comm = st.session_state.get(f"{draft_key}_comm", str(existing_data['comments']) if existing_data is not None else "")
+            user_comments = st.text_area("Comments / Remarks", value=saved_comm, key=f"input_comm")
             
             recom = st.radio("Recommendation", ["Pending", "Approve", "Revise", "Reject"], horizontal=True)
             
-            # --- SUBMIT & CANCEL BUTTONS ---
             col_sub, col_can = st.columns(2)
             with col_sub:
                 submit = st.form_submit_button("📤 Submit Evaluation", use_container_width=True, type="primary")
@@ -171,40 +169,44 @@ if selected_proposal != "-- Select --":
                                       ON CONFLICT (evaluator, proposal_title) DO UPDATE SET strategic_alignment=EXCLUDED.strategic_alignment, potential_impact=EXCLUDED.potential_impact, feasibility=EXCLUDED.feasibility, budget_justification=EXCLUDED.budget_justification, timeline_readiness=EXCLUDED.timeline_readiness, execution_strategy=EXCLUDED.execution_strategy, total=EXCLUDED.total, recommendation=EXCLUDED.recommendation, comments=EXCLUDED.comments, last_updated=EXCLUDED.last_updated"""),
                               {"ev": current_user, "prop": selected_proposal, "s1": inputs['Strategic Alignment'], "s2": inputs['Potential Impact'], "s3": inputs['Feasibility'], "s4": inputs['Budget Justification'], "s5": inputs['Timeline Readiness'], "s6": inputs['Execution Strategy'], "tot": final_total, "rec": recom, "comm": user_comments, "ts": datetime.now()})
                     s.commit()
+                
                 st.session_state.is_editing = False
                 st.success("Evaluation Saved!")
                 time.sleep(1)
-                st.rerun() # This brings the user back to the selection screen automatically
+                st.rerun()
             
             if cancel:
                 st.session_state.is_editing = False
                 st.rerun()
+
+        # Update draft state silently outside the form
+        for name, _ in CRITERIA:
+            col_db = name.lower().replace(" ", "_")
+            st.session_state[f"{draft_key}_{col_db}"] = inputs[name]
+        st.session_state[f"{draft_key}_comm"] = user_comments
 
 else:
     # --- 10. PROGRESS DASHBOARD ---
     st.subheader("📊 Your Evaluation Summary")
     
     if not scored_df.empty:
-        # Format the summary table for better reading
         summary_display = scored_df.rename(columns={
             "proposal_title": "Proposal Name",
-            "total": "Score (/5.0)",
-            "comments": "Your Remarks"
+            "total": "Score",
+            "comments": "Remarks"
         })
-        st.table(summary_display)
+        st.dataframe(summary_display, use_container_width=True, hide_index=True)
     else:
         st.info("No proposals evaluated yet.")
 
-    # Show Remaining List
     remaining = [p for p in PROPOSALS if p not in completed_proposals]
     if remaining:
         with st.expander("⏳ View Remaining Proposals"):
-            for p in remaining:
-                st.write(f"▫️ {p}")
+            for p in remaining: st.write(f"▫️ {p}")
 
     # --- 11. CONDITIONAL FINALIZE ---
-    all_done = set(PROPOSALS).issubset(set(completed_proposals))
-    if all_done and total_count > 0:
+    all_done = (len(remaining) == 0 and total_count > 0)
+    if all_done:
         st.divider()
         st.subheader("🏁 Finish Evaluation")
         st.success("All proposals complete. Finalize to lock your session.")
@@ -218,4 +220,3 @@ else:
     else:
         st.divider()
         st.info(f"💡 Complete the **{len(remaining)}** remaining proposal(s) to finalize.")
-

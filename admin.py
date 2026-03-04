@@ -304,8 +304,14 @@ elif menu_choice == "👤 Evaluators & Links":
         current_db_pass = "1234"
 
     col_pass1, col_pass2 = st.columns([2, 1])
+    
+    # 1. Text input with label
     new_eval_pass = col_pass1.text_input("Set Global Evaluator Password", value=current_db_pass) 
     
+    # 2. Add an empty markdown space to push the button down (approx 28px)
+    col_pass2.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
+    
+    # 3. The button now aligns perfectly with the text box
     if col_pass2.button("Update Password", use_container_width=True, type="primary"):
         with conn.session as s:
             s.execute(text("UPDATE settings SET value = :v WHERE key = 'evaluator_password'"), {"v": new_eval_pass.strip()})
@@ -376,3 +382,4 @@ elif menu_choice == "📜 History":
             st.info("No archived records found.")
     except Exception as e:
         st.error(f"Error loading history: {e}")
+

@@ -1,11 +1,10 @@
 import streamlit as st
 import pandas as pd
-import os
 from datetime import datetime
 from sqlalchemy import text
+from streamlit_autorefresh import st_autorefresh
 
-# --- Configuration & Credentials ---
-# Replace with your actual Supabase Project URL
+# --- 1. CONFIGURATION ---
 SUPABASE_URL = "https://your-project-id.supabase.co"
 BUCKET_NAME = "evaluator-photos"
 
@@ -17,18 +16,21 @@ CRITERIA = [
 
 st.set_page_config(page_title="ASM Evaluator Entry", layout="centered")
 
-# --- Database Connection ---
+# --- 2. DATABASE CONNECTION ---
 conn = st.connection("postgresql", type="sql")
 
-# --- Helper Functions (Cloud Based) ---
+# --- 3. HELPER FUNCTIONS ---
 def get_cloud_list(table, column):
-    df = conn.query(f"SELECT {column} FROM {table} ORDER BY {column} ASC;", ttl=0)
-    return df[column].tolist() if not df.empty else []
+    try:
+        df = conn.query(f"SELECT {column} FROM {table} ORDER BY {column} ASC;", ttl=0)
+        return df[column].tolist() if not df.empty else []
+    except:
+        return []
 
 EVALUATORS = get_cloud_list("evaluators", "name")
 PROPOSALS = get_cloud_list("proposals", "title")
 
-# --- User Identification ---
+# --- 4. USER IDENTIFICATION ---
 user_id = st.query_params.get("user")
 if user_id is None or not EVALUATORS:
     st.warning("⚠️ Access Denied. Please use your personalized link.")
@@ -40,25 +42,27 @@ except:
     st.error("Invalid User ID.")
     st.stop()
 
-# --- Header with Supabase Photo ---
+# --- 5. AUTO-REFRESH (Optional/Safe) ---
+# We use a key to ensure this refresh doesn't break the form state
+st_autorefresh(interval=60000, key="form_stay_alive") 
+
+# --- 6. HEADER WITH PHOTO ---
 col_img, col_txt = st.columns([1, 4])
 with col_img:
-    # Construct the Public URL for the photo
     img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{current_user.replace(' ', '_')}.png"
-    # Display image; fall back to professional initials if image fails to load
     st.markdown(f"""
-        <img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover;" 
+        <img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; border: 2px solid #E2E8F0;" 
         onerror="this.src='https://ui-avatars.com/api/?name={current_user}&background=random&size=128'">
     """, unsafe_allow_html=True)
 
 with col_txt:
     st.title(f"Welcome, {current_user}")
-    st.write("ASM Official Evaluation Portal")
+    st.write("Official ASM Evaluation Portal")
 
 selected_proposal = st.selectbox("Select Proposal Title", ["-- Select --"] + PROPOSALS)
 
 if selected_proposal != "-- Select --":
-    # --- LOAD EXISTING DATA FROM CLOUD ---
+    # LOAD DATA
     query = text("SELECT * FROM scores WHERE evaluator = :ev AND proposal_title = :prop LIMIT 1;")
     df_match = conn.query(query, params={"ev": current_user, "prop": selected_proposal}, ttl="0s")
     existing_data = df_match.iloc[0] if not df_match.empty else None
@@ -66,7 +70,7 @@ if selected_proposal != "-- Select --":
     if "is_editing" not in st.session_state:
         st.session_state.is_editing = False
 
-    # --- VIEW MODE ---
+    # VIEW MODE
     if existing_data is not None and not st.session_state.is_editing:
         st.success(f"✅ Record found for: {selected_proposal}")
         st.metric("Your Total Score", f"{existing_data['total']} / 5.0")
@@ -74,49 +78,41 @@ if selected_proposal != "-- Select --":
             st.session_state.is_editing = True
             st.rerun()
             
-    # --- FORM / EDIT MODE ---
+    # FORM MODE
     else:
-        with st.form("evaluation_form", clear_on_submit=True):
-            st.info("ℹ️ **Flexible Scoring**: If a criterion is not applicable, you may leave it at 0.0.")
+        # Putting everything in a FORM prevents Auto-Refresh from clearing your typing
+        with st.form("evaluation_form", clear_on_submit=False):
+            st.info("ℹ️ **Flexible Scoring**: Leave at 0.0 if a criterion is not applicable.")
             inputs = {}
             
             for name, weight in CRITERIA:
-                # Match database column names (lowercase, underscores)
-                col_name = name.lower().replace(" ", "_")
-                d_val = float(existing_data[col_name]) if (existing_data is not None) else 0.0
+                col_db = name.lower().replace(" ", "_")
+                d_val = float(existing_data[col_db]) if (existing_data is not None) else 0.0
                 inputs[name] = st.number_input(f"{name} ({int(weight*100)}%)", 0.0, 5.0, d_val, 0.1)
             
             d_comm = str(existing_data['comments']) if (existing_data is not None) else ""
-            user_comments = st.text_area("Comments / Remarks", value=d_comm, placeholder="Enter any notes here...")
+            user_comments = st.text_area("Comments / Remarks", value=d_comm)
             
-            # --- Non-mandatory Recommendation Logic ---
             rec_options = ["Pending", "Approve", "Revise", "Reject"]
             existing_rec = existing_data['recommendation'] if (existing_data is not None) else "Pending"
-            
-            try:
-                rec_idx = rec_options.index(existing_rec)
-            except ValueError:
-                rec_idx = 0
-                
+            rec_idx = rec_options.index(existing_rec) if existing_rec in rec_options else 0
             recom = st.radio("Recommendation", rec_options, index=rec_idx, horizontal=True)
             
-            if st.form_submit_button("📤 Submit Evaluation", use_container_width=True, type="primary"):
-                # --- CALCULATION LOGIC (Proportional Weighting) ---
-                weighted_sum = 0
-                total_weight_used = 0
-                
-                for name, weight in CRITERIA:
-                    score = inputs[name]
-                    if score > 0: 
-                        weighted_sum += (score * weight)
-                        total_weight_used += weight
-                
-                # Normalize based on used weights
-                final_total = round(weighted_sum / total_weight_used, 2) if total_weight_used > 0 else 0.0
+            submit = st.form_submit_button("📤 Submit Evaluation", use_container_width=True, type="primary")
 
-                # --- CLOUD SAVE LOGIC (PostgreSQL) ---
+            if submit:
+                # Proportional Weighting Calculation
+                w_sum = 0
+                w_used = 0
+                for name, weight in CRITERIA:
+                    if inputs[name] > 0:
+                        w_sum += (inputs[name] * weight)
+                        w_used += weight
+                
+                final_total = round(w_sum / w_used, 2) if w_used > 0 else 0.0
+
                 with conn.session as s:
-                    sql = text("""
+                    save_query = text("""
                         INSERT INTO scores (
                             evaluator, proposal_title, strategic_alignment, potential_impact, 
                             feasibility, budget_justification, timeline_readiness, 
@@ -135,8 +131,7 @@ if selected_proposal != "-- Select --":
                             comments = EXCLUDED.comments,
                             last_updated = EXCLUDED.last_updated;
                     """)
-                    
-                    s.execute(sql, {
+                    s.execute(save_query, {
                         "ev": current_user, "prop": selected_proposal,
                         "s1": inputs['Strategic Alignment'], "s2": inputs['Potential Impact'],
                         "s3": inputs['Feasibility'], "s4": inputs['Budget Justification'],
@@ -147,8 +142,6 @@ if selected_proposal != "-- Select --":
                 
                 st.session_state.is_editing = False
                 st.balloons()
-                st.success("🎉 Submission Successful!")
                 st.rerun()
-
 else:
     st.info("Please select a proposal title to begin.")

@@ -5,7 +5,7 @@ from sqlalchemy import text
 from streamlit_autorefresh import st_autorefresh
 
 # --- 1. CONFIGURATION ---
-SUPABASE_URL = "https://your-project-id.supabase.co"
+SUPABASE_URL = "https://qizxricvzsnsfjibfmxw.supabase.co"
 BUCKET_NAME = "evaluator-photos"
 
 CRITERIA = [
@@ -145,3 +145,4 @@ if selected_proposal != "-- Select --":
                 st.rerun()
 else:
     st.info("Please select a proposal title to begin.")
+

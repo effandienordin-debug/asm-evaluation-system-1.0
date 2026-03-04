@@ -260,6 +260,7 @@ else:
             "comments": "Remarks"
         })
         
+        # FIXED CONFIGURATION
         st.dataframe(
             summary_display, 
             use_container_width=True, 
@@ -268,10 +269,13 @@ else:
             selection_mode="single-row", 
             key="summary_table",
             column_config={
-                "Remarks": st.column_config.TextColumn("Remarks", width="large", wrap_text=True),
-                "Proposal Name": st.column_config.TextColumn("Proposal Name", width="medium"),
-                "Score": st.column_config.TextColumn("Score", width="small"),
-                "Recommendation": st.column_config.TextColumn("Recommendation", width="small"),
+                "Remarks": st.column_config.TextColumn(
+                    width="large", 
+                    wrap_text=True
+                ),
+                "Proposal Name": st.column_config.TextColumn(width="medium"),
+                "Score": st.column_config.TextColumn(width="small"),
+                "Recommendation": st.column_config.TextColumn(width="small"),
             }
         )
     else:
@@ -298,3 +302,4 @@ else:
     else:
         st.divider()
         st.info(f"💡 Complete the **{len(remaining)}** remaining proposal(s) to finalize.")
+

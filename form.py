@@ -121,9 +121,9 @@ with col_txt:
     st.title(f"Welcome, {current_user}")
     st.write("Official ASM Evaluation Portal")
 
-# --- 10. PROGRESS DATA FETCH ---
+# --- 10. PROGRESS DATA FETCH (Added Recommendation) ---
 try:
-    scored_df = conn.query("SELECT proposal_title, total, comments FROM scores WHERE evaluator = :ev", params={"ev": current_user}, ttl=0)
+    scored_df = conn.query("SELECT proposal_title, total, recommendation, comments FROM scores WHERE evaluator = :ev", params={"ev": current_user}, ttl=0)
     completed_proposals = scored_df['proposal_title'].tolist() if not scored_df.empty else []
 except:
     scored_df = pd.DataFrame()
@@ -173,11 +173,9 @@ if selected_proposal != "-- Select --":
         with col_back:
             st.button("⬅️ Back to Summary", use_container_width=True, on_click=nav_to_summary)
     else:
-        # --- RENDER FORM ---
         with st.form("evaluation_form"):
             st.subheader(f"Evaluation: {selected_proposal}")
             
-            # --- PROGRESS RING LOGIC ---
             inputs = {}
             criteria_met = 0
             for name, weight in CRITERIA:
@@ -187,7 +185,6 @@ if selected_proposal != "-- Select --":
                 inputs[name] = st.number_input(f"{name} ({int(weight*100)}%)", 0.0, 5.0, saved_val, 0.1)
                 if inputs[name] > 0: criteria_met += 1
             
-            # Progress calculation
             form_progress = criteria_met / len(CRITERIA)
             st.write(f"Criteria Completed: {criteria_met}/{len(CRITERIA)}")
             st.progress(form_progress)
@@ -196,9 +193,8 @@ if selected_proposal != "-- Select --":
             saved_comm = st.session_state.get(f"{draft_key}_comm", default_comm)
             user_comments = st.text_area("Comments / Remarks", value=saved_comm)
             
-            # --- DRAFT SAVED INDICATOR ---
             if st.session_state.get(f"{draft_key}_dirty", False):
-                st.caption("🟢 Changes detected in draft (Autosaved to session)")
+                st.caption("🟢 Changes detected in draft")
             
             default_recom = str(existing_data['recommendation']) if existing_data is not None else "Pending"
             recom = st.radio("Recommendation", ["Pending", "Approve", "Revise", "Reject"], 
@@ -237,7 +233,6 @@ if selected_proposal != "-- Select --":
                 st.session_state.pending_nav = True
                 st.rerun()
 
-        # Update draft state and set "dirty" flag for indicator
         for name, _ in CRITERIA:
             key = f"{draft_key}_{name.lower().replace(' ', '_')}"
             if st.session_state.get(key) != inputs[name]:
@@ -249,13 +244,30 @@ if selected_proposal != "-- Select --":
             st.session_state[f"{draft_key}_dirty"] = True
 
 else:
-    # --- 13. SUMMARY DASHBOARD ---
+    # --- 13. SUMMARY DASHBOARD (Added Rec & Score Formatting) ---
     st.subheader("📊 Your Evaluation Summary")
     st.info("💡 Click a row in the table below to edit that proposal.")
     
     if not scored_df.empty:
-        summary_display = scored_df.rename(columns={"proposal_title": "Proposal Name", "total": "Score", "comments": "Remarks"})
-        st.dataframe(summary_display, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", key="summary_table")
+        # Create a copy to format scores as "X / 5.0"
+        summary_display = scored_df.copy()
+        summary_display['total'] = summary_display['total'].apply(lambda x: f"{x} / 5.0")
+        
+        summary_display = summary_display.rename(columns={
+            "proposal_title": "Proposal Name", 
+            "total": "Score", 
+            "recommendation": "Recommendation",
+            "comments": "Remarks"
+        })
+        
+        st.dataframe(
+            summary_display, 
+            use_container_width=True, 
+            hide_index=True, 
+            on_select="rerun", 
+            selection_mode="single-row", 
+            key="summary_table"
+        )
     else:
         st.info("No proposals evaluated yet.")
 

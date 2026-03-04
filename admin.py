@@ -1,5 +1,4 @@
 import streamlit as st
-import pd
 import pandas as pd
 import time
 import qrcode
@@ -266,3 +265,4 @@ elif menu_choice == "📜 History":
                 st.rerun()
     else:
         st.info("No data in archive.")
+

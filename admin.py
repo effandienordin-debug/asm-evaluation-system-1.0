@@ -266,7 +266,40 @@ elif menu_choice == "👤 Evaluators & Links":
                         st.image(buf.getvalue(), caption=d['Name'], use_container_width=True)
         else:
             st.info("Add evaluators to generate links.")
+            
+    # --- NEW: Evaluator Password Management ---
+    st.divider()
+    st.subheader("🔑 Global Evaluator Access")
 
+    # Fetch current password from the database settings table
+    try:
+        # Ensure the settings table exists
+        with conn.session as s:
+            s.execute(text("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);"))
+            s.execute(text("INSERT INTO settings (key, value) VALUES ('evaluator_password', 'change_me_123') ON CONFLICT DO NOTHING;"))
+            s.commit()
+        
+        pass_query = "SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1"
+        current_pass_df = conn.query(pass_query, ttl=0)
+        current_pass = current_pass_df.iloc[0]['value'] if not current_pass_df.empty else "Not Set"
+    except Exception as e:
+        current_pass = "Error fetching"
+        st.error(f"Settings Table Error: {e}")
+
+    col_p1, col_p2 = st.columns([2, 1])
+    with col_p1:
+        new_pass = st.text_input("Set/Change Evaluator Password", value=current_pass, type="password", help="This is the password all evaluators will use to log in.")
+    with col_p2:
+        if st.button("Update Password", use_container_width=True, type="primary"):
+            with conn.session as s:
+                s.execute(text("UPDATE settings SET value = :v WHERE key = 'evaluator_password'"), {"v": new_pass.strip()})
+                s.commit()
+            st.success("Password Updated!")
+            time.sleep(1)
+            st.rerun()
+
+    st.caption(f"Current Access Password: `{current_pass}`")
+    # ------------------------------------------
     st.divider()
     st.subheader("Manage Access & Status")
     
@@ -329,5 +362,6 @@ elif menu_choice == "📜 History":
                 st.rerun()
     else:
         st.info("No data in archive.")
+
 
 

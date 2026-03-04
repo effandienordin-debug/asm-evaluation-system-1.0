@@ -19,11 +19,18 @@ st.set_page_config(page_title="ASM Evaluator Entry", layout="centered")
 # --- 2. DATABASE CONNECTION ---
 conn = st.connection("postgresql", type="sql")
 
-# --- 3. LOGIN LOGIC (PASSWORD PROTECTION) ---
+# --- 3. LOGIN LOGIC (DATABASE-DRIVEN) ---
 def check_password():
     def password_entered():
-        # Match this key to what you wrote in the Secrets box
-        if st.session_state["password"] == st.secrets["evaluator_password"]:
+        # Fetch the password from the SETTINGS table instead of Secrets
+        try:
+            pass_df = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
+            db_password = pass_df.iloc[0]['value'] if not pass_df.empty else None
+        except:
+            db_password = None
+            st.error("Database Error: Could not retrieve access settings.")
+        
+        if st.session_state["password"] == db_password:
             st.session_state["password_correct"] = True
             del st.session_state["password"]
         else:
@@ -42,6 +49,40 @@ def check_password():
 
 if not check_password():
     st.stop()
+
+# ... (Helper functions and identification logic remain the same) ...
+
+# --- ONE-TIME SUBMISSION CHECK ---
+try:
+    status_query = "SELECT has_submitted FROM evaluators WHERE name = :name LIMIT 1;"
+    df_status = conn.query(status_query, params={"name": current_user}, ttl=0)
+    if not df_status.empty and df_status.iloc[0]['has_submitted']:
+        st.warning(f"Hello {current_user}, your evaluation session has already been completed and locked.")
+        st.info("Please contact the Administrator if you need to revise your entries.")
+        st.stop()
+except:
+    pass 
+
+# ... (Header and Proposal selection logic remain the same) ...
+
+if selected_proposal != "-- Select --":
+    # ... (Your existing form logic for individual proposals) ...
+else:
+    st.info("Please select a proposal title to begin.")
+    
+    # --- 9. FINAL LOCKOUT BUTTON ---
+    # This allows the user to finish their whole session and trigger the "has_submitted" lock
+    st.divider()
+    st.subheader("🏁 Finish Evaluation")
+    st.write("Once you have submitted scores for all proposals, click below to lock your session.")
+    
+    if st.button("Finalize and Close Session", type="secondary", use_container_width=True):
+        with conn.session as s:
+            s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
+            s.commit()
+        st.success("Session Locked. Thank you!")
+        time.sleep(2)
+        st.rerun()
 
 # --- 4. HELPER FUNCTIONS ---
 def get_cloud_list(table, column):
@@ -193,4 +234,5 @@ if selected_proposal != "-- Select --":
                 st.rerun()
 else:
     st.info("Please select a proposal title to begin.")
+
 

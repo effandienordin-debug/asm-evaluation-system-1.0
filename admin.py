@@ -31,10 +31,14 @@ st.markdown("""
         padding:15px; border-radius:10px; border: 1px solid #E2E8F0; 
         text-align:center; margin-bottom:10px; min-height: 120px;
     }
+    /* Style the sidebar radio buttons to look more like a menu */
+    div[data-testid="stSidebarUserContent"] .stRadio > div {
+        gap: 10px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. DIALOGS (Edit/Delete Logic) ---
+# --- 3. DIALOGS ---
 @st.dialog("✏️ Edit Proposal")
 def edit_proposal_dialog(old_val):
     new_val = st.text_input("Edit Proposal Title", value=old_val)
@@ -86,20 +90,51 @@ def add_item_sql(table, column, value):
         s.execute(text(f"INSERT INTO {table} ({column}) VALUES (:val) ON CONFLICT DO NOTHING;"), {"val": value.strip()})
         s.commit()
 
-# --- 5. MAIN UI ---
-st.title("🛡️ ASM Admin Control Center")
+# --- 5. SIDEBAR NAVIGATION & CONTROL ---
 cache_buster = int(time.time())
 
 with st.sidebar:
+    st.title("🛡️ ASM Admin")
+    st.divider()
+    
+    # Auto Refresh Toggle
     auto_refresh = st.toggle("🔄 Auto Refresh (15s)", value=False)
     if auto_refresh: st_autorefresh(interval=15000, key="admin_refresh")
+    
+    st.subheader("📁 Menu")
+    menu_choice = st.radio(
+        "Navigate to:",
+        ["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"],
+        label_visibility="collapsed"
+    )
+    
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🚀 Session Control")
+    
+    # Pre-fetching data for session logic
+    try:
+        df_current = conn.query("SELECT evaluator FROM scores;", ttl=0)
+    except: df_current = pd.DataFrame()
+    evals_all = get_items_sql("evaluators", "name")
+    unique_submitted = df_current['evaluator'].unique().tolist() if not df_current.empty else []
+    
+    force_mode = st.toggle("⚠️ Enable Force Archive")
+    can_archive = (len(unique_submitted) >= len(evals_all) and len(evals_all) > 0) or force_mode
 
-# --- NEW TAB ARRANGEMENT ---
-tab_tracker, tab_props, tab_evals, tab_history = st.tabs(["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"])
+    if st.button("🆕 Archive & Reset", type="primary", use_container_width=True, disabled=not can_archive):
+        with conn.session as s:
+            s.execute(text("INSERT INTO scores_history SELECT *, NOW() as archive_timestamp FROM scores;"))
+            s.execute(text("TRUNCATE TABLE scores RESTART IDENTITY CASCADE;"))
+            s.commit()
+        st.balloons()
+        time.sleep(1)
+        st.rerun()
 
-# --- TAB 1: TRACKER ---
-with tab_tracker:
-    st.subheader("Live Performance Metrics")
+# --- 6. MAIN CONTENT AREA ---
+
+# --- TRACKER ---
+if menu_choice == "📊 Tracker":
+    st.header("📊 Live Performance Metrics")
     try:
         df = conn.query("SELECT * FROM scores;", ttl=0)
     except: df = pd.DataFrame()
@@ -110,9 +145,6 @@ with tab_tracker:
         st.dataframe(df, use_container_width=True)
     else:
         st.info("No scores submitted in the current session.")
-
-    evals_all = get_items_sql("evaluators", "name")
-    unique_submitted = df['evaluator'].unique().tolist() if not df.empty else []
 
     if evals_all:
         st.divider()
@@ -132,9 +164,9 @@ with tab_tracker:
                     <p style="font-size:0.8em; color:#666;">{'✅ DONE' if is_done else '⌛ WAITING'}</p>
                 </div>""", unsafe_allow_html=True)
 
-# --- TAB 2: PROPOSALS ---
-with tab_props:
-    st.subheader("Manage Proposals")
+# --- PROPOSALS ---
+elif menu_choice == "📋 Proposals":
+    st.header("📋 Manage Proposals")
     p_name = st.text_input("Add Proposal Title")
     if st.button("Add Single"):
         if p_name: add_item_sql("proposals", "title", p_name); st.rerun()
@@ -147,15 +179,16 @@ with tab_props:
             st.rerun()
 
     props = get_items_sql("proposals", "title")
-    with st.expander(f"🔍 List of Proposals ({len(props)})"):
-        for p in props:
-            c1, c2, c3 = st.columns([5, 1, 1])
-            c1.write(f"• {p}")
-            if c2.button("✏️", key=f"edit_p_{p}"): edit_proposal_dialog(p)
-            if c3.button("🗑️", key=f"del_p_{p}"): confirm_delete_dialog("proposals", "title", p)
+    st.subheader(f"Existing Proposals ({len(props)})")
+    for p in props:
+        c1, c2, c3 = st.columns([5, 1, 1])
+        c1.write(f"• {p}")
+        if c2.button("✏️", key=f"edit_p_{p}"): edit_proposal_dialog(p)
+        if c3.button("🗑️", key=f"del_p_{p}"): confirm_delete_dialog("proposals", "title", p)
 
-# --- TAB 3: EVALUATORS & LINKS ---
-with tab_evals:
+# --- EVALUATORS & LINKS ---
+elif menu_choice == "👤 Evaluators & Links":
+    st.header("👤 Evaluators & Access Links")
     col_add, col_links = st.columns([1, 1])
     
     with col_add:
@@ -173,27 +206,26 @@ with tab_evals:
 
     with col_links:
         st.subheader("Access Links")
-        evals_list = get_items_sql("evaluators", "name")
-        if evals_list:
+        if evals_all:
             base_url = st.text_input("Base URL", value="https://your-app.streamlit.app").rstrip('/')
-            link_data = [{"Name": n, "Link": f"{base_url}/?user={i}"} for i, n in enumerate(evals_list)]
+            link_data = [{"Name": n, "Link": f"{base_url}/?user={i}"} for i, n in enumerate(evals_all)]
             st.dataframe(pd.DataFrame(link_data), hide_index=True)
-            if st.button("📋 Copy All Links"):
+            if st.button("📋 Show Links for Copying"):
                 st.code("\n".join([f"{d['Name']}: {d['Link']}" for d in link_data]))
 
     st.divider()
-    with st.expander("👥 Manage Existing Evaluators"):
-        for e in evals_list:
-            c1, c2, c3, c4 = st.columns([1, 4, 1, 1])
-            img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
-            c1.image(img_url, width=40)
-            c2.write(e)
-            if c3.button("✏️", key=f"edit_e_{e}"): edit_evaluator_dialog(e)
-            if c4.button("🗑️", key=f"del_e_{e}"): confirm_delete_dialog("evaluators", "name", e)
+    st.subheader("Manage Existing Evaluators")
+    for e in evals_all:
+        c1, c2, c3, c4 = st.columns([1, 4, 1, 1])
+        img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
+        c1.image(img_url, width=40)
+        c2.write(e)
+        if c3.button("✏️", key=f"edit_e_{e}"): edit_evaluator_dialog(e)
+        if c4.button("🗑️", key=f"del_e_{e}"): confirm_delete_dialog("evaluators", "name", e)
 
-# --- TAB 4: HISTORY ---
-with tab_history:
-    st.subheader("📜 Historical Sessions")
+# --- HISTORY ---
+elif menu_choice == "📜 History":
+    st.header("📜 Historical Sessions")
     try:
         df_history = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     except:
@@ -214,18 +246,3 @@ with tab_history:
                 st.rerun()
     else:
         st.info("No data in archive.")
-
-# --- FOOTER: SESSION CONTROL ---
-st.divider()
-st.header("🚀 Session Control")
-force_mode = st.toggle("⚠️ Enable Force Archive")
-can_archive = (len(unique_submitted) >= len(evals_all) and len(evals_all) > 0) or force_mode
-
-if st.button("🆕 Archive & Reset Dashboard", type="primary", use_container_width=True, disabled=not can_archive):
-    with conn.session as s:
-        s.execute(text("INSERT INTO scores_history SELECT *, NOW() as archive_timestamp FROM scores;"))
-        s.execute(text("TRUNCATE TABLE scores RESTART IDENTITY CASCADE;"))
-        s.commit()
-    st.balloons()
-    time.sleep(1)
-    st.rerun()

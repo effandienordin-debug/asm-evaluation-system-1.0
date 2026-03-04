@@ -197,7 +197,7 @@ if menu_choice == "📊 Tracker":
                         <p style="font-weight:bold; margin:0; color:#333;">{nick}</p>
                         <p style="font-size:0.7em; color:#999;">{name}</p>
                         <p style="font-size:1.2em; font-weight:bold; color:#1E3A8A; margin:5px 0;">{done_count} / {total_props_count}</p>
-                        <p style="font-size:0.7em; color:#666; letter-spacing:1px;">FINISHED</p>
+                        <p style="font-size:0.7em; color:#666; letter-spacing:1px;">{'FINISHED' if is_done else 'IN PROGRESS'}</p>
                     </div>
                 """, unsafe_allow_html=True)
 
@@ -251,10 +251,8 @@ elif menu_choice == "👤 Evaluators & Links":
 
         if not evals_df.empty:
             target_url = "https://asm-evaluation-system-10-evaluation-form.streamlit.app"
-            # USE NICKNAME FOR LINK GENERATION
             link_data = []
             for _, row in evals_df.iterrows():
-                # Fallback to name if nick is somehow empty
                 id_to_use = row['nickname'] if row['nickname'] else row['name']
                 link_data.append({
                     "Nickname": row['nickname'],
@@ -276,15 +274,36 @@ elif menu_choice == "👤 Evaluators & Links":
                     with qr_cols[idx % 3]:
                         st.image(buf.getvalue(), caption=f"Login: {d['Nickname']}", use_container_width=True)
 
-    # Password & Management
+    # --- PASSWORD RESET & SYSTEM SETTINGS ---
     st.divider()
     st.subheader("⚙️ System Management")
     
-    # Password logic (omitted logic remains the same as before)
-    # ... 
+    # Logic to handle global evaluator password
+    try:
+        with conn.session as s:
+            s.execute(text("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);"))
+            s.execute(text("INSERT INTO settings (key, value) VALUES ('evaluator_password', '1234') ON CONFLICT DO NOTHING;"))
+            s.commit()
+        pass_df = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
+        current_db_pass = pass_df.iloc[0]['value'] if not pass_df.empty else "1234"
+    except:
+        current_db_pass = "1234"
+
+    col_pass1, col_pass2 = st.columns([2, 1])
+    new_eval_pass = col_pass1.text_input("Reset Evaluator Login Password", value=current_db_pass, type="password")
+    if col_pass2.button("Update Global Password", use_container_width=True):
+        with conn.session as s:
+            s.execute(text("UPDATE settings SET value = :v WHERE key = 'evaluator_password'"), {"v": new_eval_pass.strip()})
+            s.commit()
+        st.success("✅ Password Updated!")
+        time.sleep(1)
+        st.rerun()
+
+    st.write("---")
+    st.subheader("🔓 Access Control")
 
     try:
-        status_df = conn.query("SELECT name, nickname, has_submitted FROM evaluators;", ttl=0)
+        status_df = conn.query("SELECT name, nickname, has_submitted FROM evaluators ORDER BY name ASC;", ttl=0)
     except: status_df = pd.DataFrame()
 
     for _, row in status_df.iterrows():
@@ -294,19 +313,29 @@ elif menu_choice == "👤 Evaluators & Links":
 
         c1, c2, c3, c4, c5 = st.columns([1, 3, 1, 1, 2])
         img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
-        c1.image(img_url, width=40)
+        
+        c1.markdown(f'<img src="{img_url}" style="width:40px; height:40px; border-radius:50%; object-fit:cover;" onerror="this.src=\'https://ui-avatars.com/api/?name={e}\'">', unsafe_allow_html=True)
         c2.write(f"**{nick}** ({e}) \n*Status: {'🔒 LOCKED' if is_locked else '🔓 OPEN'}*")
+        
         if c3.button("✏️", key=f"ed_{e}"): edit_evaluator_dialog(e, nick)
         if c4.button("🗑️", key=f"dl_{e}"): confirm_delete_dialog("evaluators", "name", e)
         
         if is_locked:
-            if c5.button("Reset Access", key=f"re_{e}", use_container_width=True):
+            if c5.button("Reset User Access", key=f"re_{e}", use_container_width=True):
                 with conn.session as s:
                     s.execute(text("UPDATE evaluators SET has_submitted = FALSE WHERE name = :n"), {"n": e})
                     s.commit()
                 st.rerun()
         else:
-            c5.button("Active", key=f"pr_{e}", disabled=True, use_container_width=True)
+            c5.button("Session Active", key=f"pr_{e}", disabled=True, use_container_width=True)
 
-# History Section 
-# ... (Remains the same as previous)
+elif menu_choice == "📜 History":
+    st.header("📜 Archived Evaluations")
+    try:
+        df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
+        if not df_hist.empty:
+            st.dataframe(df_hist, use_container_width=True)
+        else:
+            st.info("No archived records found.")
+    except:
+        st.error("No history table found. It will be created during your first archive.")

@@ -11,17 +11,25 @@ from streamlit_autorefresh import st_autorefresh
 # --- 1. CONFIG & CONNECTIONS ---
 st.set_page_config(page_title="ASM Admin Panel", layout="wide")
 
-# Securely pull from Streamlit Secrets
-SUPABASE_URL = st.secrets["supabase_url"]
-SUPABASE_KEY = st.secrets["supabase_key"]
+# Safe Secret Loading to prevent KeyError
+def load_secret(key):
+    if key in st.secrets:
+        return st.secrets[key]
+    st.error(f"❌ Missing Secret: **{key}**")
+    st.info(f"Go to Settings > Secrets and ensure **{key}** is defined at the TOP of the file.")
+    st.stop()
+
+SUPABASE_URL = load_secret("supabase_url")
+SUPABASE_KEY = load_secret("supabase_key")
+ADMIN_PASSWORD = load_secret("password") # We'll use this in the login logic
 BUCKET_NAME = "evaluator-photos"
 
 # --- 2. LOGIN LOGIC ---
 def check_password():
     """Returns True if the user had the correct password."""
     def password_entered():
-        # Pulled from secrets to keep code clean
-        if st.session_state["password"] == st.secrets["password"]: 
+        # Now uses the ADMIN_PASSWORD we safely loaded above
+        if st.session_state["password"] == ADMIN_PASSWORD: 
             st.session_state["password_correct"] = True
             del st.session_state["password"] 
         else:
@@ -297,3 +305,4 @@ elif menu_choice == "📜 History":
                 st.rerun()
     else:
         st.info("No data in archive.")
+

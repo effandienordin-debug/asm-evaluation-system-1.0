@@ -21,17 +21,17 @@ conn = st.connection("postgresql", type="sql")
 
 # --- 3. LOGIN LOGIC (PASSWORD PROTECTION) ---
 def check_password():
-    """Returns True if the user had the correct password."""
     def password_entered():
-        if st.session_state["password"] == st.secrets["password"]:
+        # Match this key to what you wrote in the Secrets box
+        if st.session_state["password"] == st.secrets["evaluator_password"]:
             st.session_state["password_correct"] = True
-            del st.session_state["password"] 
+            del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
 
     if "password_correct" not in st.session_state:
-        st.title("🔐 ASM Secure Access")
-        st.text_input("Please enter the access password", type="password", on_change=password_entered, key="password")
+        st.title("🔐 ASM Evaluator Login")
+        st.text_input("Enter Access Password", type="password", on_change=password_entered, key="password")
         return False
     elif not st.session_state["password_correct"]:
         st.title("🔐 ASM Secure Access")
@@ -193,3 +193,4 @@ if selected_proposal != "-- Select --":
                 st.rerun()
 else:
     st.info("Please select a proposal title to begin.")
+

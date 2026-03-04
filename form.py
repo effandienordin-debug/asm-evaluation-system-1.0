@@ -20,10 +20,11 @@ st.set_page_config(page_title="ASM Evaluator Entry", layout="centered")
 # --- 2. DATABASE CONNECTION ---
 conn = st.connection("postgresql", type="sql")
 
-# --- 3. LOGIN LOGIC ---
+# --- 3. LOGIN LOGIC (DATABASE-DRIVEN) ---
 def check_password():
     def password_entered():
         try:
+            # Fetches password from SETTINGS table
             pass_df = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
             db_password = pass_df.iloc[0]['value'] if not pass_df.empty else None
         except:
@@ -49,7 +50,7 @@ def check_password():
 if not check_password():
     st.stop()
 
-# --- 4. DATA FETCHING ---
+# --- 4. DATA FETCHING HELPERS ---
 def get_cloud_list(table, column):
     try:
         df = conn.query(f"SELECT {column} FROM {table} ORDER BY {column} ASC;", ttl=0)
@@ -57,7 +58,9 @@ def get_cloud_list(table, column):
     except:
         return []
 
+# Auto-refresh every 30 seconds to keep connection alive
 st_autorefresh(interval=30000, key="evaluator_heartbeat")
+
 EVALUATORS = get_cloud_list("evaluators", "name")
 PROPOSALS = get_cloud_list("proposals", "title")
 
@@ -83,23 +86,44 @@ try:
     status_df = conn.query("SELECT has_submitted FROM evaluators WHERE name = :name LIMIT 1;", params={"name": current_user}, ttl=0)
     if not status_df.empty and status_df.iloc[0]['has_submitted']:
         st.warning(f"Hello {current_user}, your session is completed and locked.")
-        st.info("Contact the Administrator if you need to revise your entries.")
+        st.info("Please contact the Administrator if you need to revise your entries.")
         st.stop()
 except:
     pass
 
-# --- 7. HEADER ---
+# --- 7. HEADER & PHOTO ---
 cache_buster = int(datetime.now().timestamp())
 col_img, col_txt = st.columns([1, 4])
 with col_img:
     clean_name = current_user.replace(' ', '_')
     img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{clean_name}.png?t={cache_buster}"
-    st.markdown(f'<div style="text-align: center;"><img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; border: 3px solid #1E3A8A;" onerror="this.src=\'https://ui-avatars.com/api/?name={current_user}\'"></div>', unsafe_allow_html=True)
+    st.markdown(f'''
+        <div style="text-align: center;">
+            <img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; border: 3px solid #1E3A8A;" 
+            onerror="this.src='https://ui-avatars.com/api/?name={current_user}&background=random&size=128'">
+        </div>
+    ''', unsafe_allow_html=True)
+
 with col_txt:
     st.title(f"Welcome, {current_user}")
     st.write("Official ASM Evaluation Portal")
 
-# --- 8. EVALUATION FORM ---
+# --- 8. PROGRESS TRACKING ---
+try:
+    scored_df = conn.query("SELECT proposal_title FROM scores WHERE evaluator = :ev", params={"ev": current_user}, ttl=0)
+    completed_proposals = scored_df['proposal_title'].tolist() if not scored_df.empty else []
+except:
+    completed_proposals = []
+
+total_count = len(PROPOSALS)
+done_count = len(completed_proposals)
+progress_val = done_count / total_count if total_count > 0 else 0
+
+st.write(f"**Overall Progress: {done_count} / {total_count} Proposals Evaluated**")
+st.progress(progress_val)
+st.divider()
+
+# --- 9. EVALUATION FORM LOGIC ---
 selected_proposal = st.selectbox("Select Proposal Title", ["-- Select --"] + PROPOSALS)
 
 if selected_proposal != "-- Select --":
@@ -118,14 +142,20 @@ if selected_proposal != "-- Select --":
             st.rerun()
     else:
         with st.form("evaluation_form"):
+            st.info("ℹ️ **Flexible Scoring**: Leave at 0.0 if a criterion is not applicable.")
             inputs = {}
             for name, weight in CRITERIA:
                 col_db = name.lower().replace(" ", "_")
                 d_val = float(existing_data[col_db]) if (existing_data is not None) else 0.0
                 inputs[name] = st.number_input(f"{name} ({int(weight*100)}%)", 0.0, 5.0, d_val, 0.1)
             
-            user_comments = st.text_area("Comments", value=str(existing_data['comments']) if existing_data is not None else "")
-            recom = st.radio("Recommendation", ["Pending", "Approve", "Revise", "Reject"], horizontal=True)
+            d_comm = str(existing_data['comments']) if (existing_data is not None) else ""
+            user_comments = st.text_area("Comments / Remarks", value=d_comm)
+            
+            rec_options = ["Pending", "Approve", "Revise", "Reject"]
+            existing_rec = existing_data['recommendation'] if (existing_data is not None) else "Pending"
+            rec_idx = rec_options.index(existing_rec) if existing_rec in rec_options else 0
+            recom = st.radio("Recommendation", rec_options, index=rec_idx, horizontal=True)
             
             if st.form_submit_button("📤 Submit Evaluation", use_container_width=True, type="primary"):
                 w_sum = sum(inputs[name] * weight for name, weight in CRITERIA if inputs[name] > 0)
@@ -133,23 +163,68 @@ if selected_proposal != "-- Select --":
                 final_total = round(w_sum / w_used, 2) if w_used > 0 else 0.0
 
                 with conn.session as s:
-                    s.execute(text("""INSERT INTO scores (evaluator, proposal_title, strategic_alignment, potential_impact, feasibility, budget_justification, timeline_readiness, execution_strategy, total, recommendation, comments, last_updated)
-                                      VALUES (:ev, :prop, :s1, :s2, :s3, :s4, :s5, :s6, :tot, :rec, :comm, :ts)
-                                      ON CONFLICT (evaluator, proposal_title) DO UPDATE SET strategic_alignment=EXCLUDED.strategic_alignment, potential_impact=EXCLUDED.potential_impact, feasibility=EXCLUDED.feasibility, budget_justification=EXCLUDED.budget_justification, timeline_readiness=EXCLUDED.timeline_readiness, execution_strategy=EXCLUDED.execution_strategy, total=EXCLUDED.total, recommendation=EXCLUDED.recommendation, comments=EXCLUDED.comments, last_updated=EXCLUDED.last_updated"""),
-                              {"ev": current_user, "prop": selected_proposal, "s1": inputs['Strategic Alignment'], "s2": inputs['Potential Impact'], "s3": inputs['Feasibility'], "s4": inputs['Budget Justification'], "s5": inputs['Timeline Readiness'], "s6": inputs['Execution Strategy'], "tot": final_total, "rec": recom, "comm": user_comments, "ts": datetime.now()})
+                    s.execute(text("""
+                        INSERT INTO scores (
+                            evaluator, proposal_title, strategic_alignment, potential_impact, 
+                            feasibility, budget_justification, timeline_readiness, 
+                            execution_strategy, total, recommendation, comments, last_updated
+                        )
+                        VALUES (:ev, :prop, :s1, :s2, :s3, :s4, :s5, :s6, :tot, :rec, :comm, :ts)
+                        ON CONFLICT (evaluator, proposal_title) DO UPDATE SET
+                            strategic_alignment = EXCLUDED.strategic_alignment,
+                            potential_impact = EXCLUDED.potential_impact,
+                            feasibility = EXCLUDED.feasibility,
+                            budget_justification = EXCLUDED.budget_justification,
+                            timeline_readiness = EXCLUDED.timeline_readiness,
+                            execution_strategy = EXCLUDED.execution_strategy,
+                            total = EXCLUDED.total,
+                            recommendation = EXCLUDED.recommendation,
+                            comments = EXCLUDED.comments,
+                            last_updated = EXCLUDED.last_updated;
+                    """), {
+                        "ev": current_user, "prop": selected_proposal,
+                        "s1": inputs['Strategic Alignment'], "s2": inputs['Potential Impact'],
+                        "s3": inputs['Feasibility'], "s4": inputs['Budget Justification'],
+                        "s5": inputs['Timeline Readiness'], "s6": inputs['Execution Strategy'],
+                        "tot": final_total, "rec": recom, "comm": user_comments, "ts": datetime.now()
+                    })
                     s.commit()
                 st.session_state.is_editing = False
                 st.balloons()
                 st.rerun()
+
 else:
-    st.info("Please select a proposal title to begin.")
+    # --- 10. PROGRESS DASHBOARD & FINALIZE ---
+    st.subheader("📊 Your Evaluation Summary")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("**✅ Completed**")
+        if completed_proposals:
+            for p in completed_proposals: st.write(f"✔️ {p}")
+        else: st.caption("No entries yet.")
+
+    with col2:
+        st.write("**⏳ Remaining**")
+        remaining = [p for p in PROPOSALS if p not in completed_proposals]
+        if remaining:
+            for p in remaining: st.write(f"▫️ {p}")
+        else: st.write("🎉 You've finished everything!")
+
     st.divider()
-    st.subheader("🏁 Finish Evaluation")
-    st.write("Click below ONLY after you have finished all proposals.")
-    if st.button("Finalize and Close Session", type="secondary", use_container_width=True):
-        with conn.session as s:
-            s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
-            s.commit()
-        st.success("Session Locked!")
-        time.sleep(2)
-        st.rerun()
+
+    # The button only appears when ALL proposals are in the completed list
+    all_done = set(PROPOSALS).issubset(set(completed_proposals))
+    
+    if all_done and total_count > 0:
+        st.subheader("🏁 Finish Evaluation")
+        st.success("All proposals have been scored. You may now finalize your session.")
+        if st.button("Finalize and Close Session", type="primary", use_container_width=True):
+            with conn.session as s:
+                s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
+                s.commit()
+            st.success("Session Locked. Thank you!")
+            time.sleep(2)
+            st.rerun()
+    else:
+        st.info(f"💡 Complete the **{len(remaining)}** remaining proposal(s) to unlock the final submission button.")

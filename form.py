@@ -22,15 +22,20 @@ conn = st.connection("postgresql", type="sql")
 # --- 3. HELPER FUNCTIONS ---
 def get_cloud_list(table, column):
     try:
+        # ttl=0 ensures we don't fetch "old" cached data from Streamlit's memory
         df = conn.query(f"SELECT {column} FROM {table} ORDER BY {column} ASC;", ttl=0)
         return df[column].tolist() if not df.empty else []
     except:
         return []
 
+# --- 4. AUTO-REFRESH (The "Heartbeat") ---
+# Refreshes every 30 seconds to check for Admin updates (new photos/proposals)
+st_autorefresh(interval=30000, key="evaluator_heartbeat")
+
 EVALUATORS = get_cloud_list("evaluators", "name")
 PROPOSALS = get_cloud_list("proposals", "title")
 
-# --- 4. USER IDENTIFICATION ---
+# --- 5. USER IDENTIFICATION ---
 user_id = st.query_params.get("user")
 if user_id is None or not EVALUATORS:
     st.warning("⚠️ Access Denied. Please use your personalized link.")
@@ -42,33 +47,31 @@ except:
     st.error("Invalid User ID.")
     st.stop()
 
-# --- 5. AUTO-REFRESH (Optional/Safe) ---
-# We use a key to ensure this refresh doesn't break the form state
-st_autorefresh(interval=60000, key="form_stay_alive") 
-
-# --- 6. HEADER WITH PHOTO ---
-# 1. Create a unique timestamp to force the browser to refresh the image
+# --- 6. HEADER WITH PHOTO & CACHE BUSTER ---
+# Unique timestamp forces the browser to ignore its cache and download the new photo
 cache_buster = int(datetime.now().timestamp())
 
 col_img, col_txt = st.columns([1, 4])
 with col_img:
-    # 2. Add ?t={cache_buster} to the end of the URL
     clean_name = current_user.replace(' ', '_')
     img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{clean_name}.png?t={cache_buster}"
     
     st.markdown(f"""
-        <img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; border: 2px solid #E2E8F0;" 
-        onerror="this.src='https://ui-avatars.com/api/?name={current_user}&background=random&size=128'">
+        <div style="text-align: center;">
+            <img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; border: 3px solid #1E3A8A;" 
+            onerror="this.src='https://ui-avatars.com/api/?name={current_user}&background=random&size=128'">
+        </div>
     """, unsafe_allow_html=True)
 
 with col_txt:
     st.title(f"Welcome, {current_user}")
     st.write("Official ASM Evaluation Portal")
 
+# --- 7. MAIN FORM LOGIC ---
 selected_proposal = st.selectbox("Select Proposal Title", ["-- Select --"] + PROPOSALS)
 
 if selected_proposal != "-- Select --":
-    # LOAD DATA
+    # LOAD DATA - ttl="0s" is vital for real-time accuracy
     query = text("SELECT * FROM scores WHERE evaluator = :ev AND proposal_title = :prop LIMIT 1;")
     df_match = conn.query(query, params={"ev": current_user, "prop": selected_proposal}, ttl="0s")
     existing_data = df_match.iloc[0] if not df_match.empty else None
@@ -86,7 +89,6 @@ if selected_proposal != "-- Select --":
             
     # FORM MODE
     else:
-        # Putting everything in a FORM prevents Auto-Refresh from clearing your typing
         with st.form("evaluation_form", clear_on_submit=False):
             st.info("ℹ️ **Flexible Scoring**: Leave at 0.0 if a criterion is not applicable.")
             inputs = {}
@@ -151,5 +153,3 @@ if selected_proposal != "-- Select --":
                 st.rerun()
 else:
     st.info("Please select a proposal title to begin.")
-
-

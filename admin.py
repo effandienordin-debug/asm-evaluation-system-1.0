@@ -21,23 +21,17 @@ conn = st.connection("postgresql", type="sql")
 
 # --- SQL Helper Functions ---
 def get_items(table, column):
+    """Fetches list from SQL with cache disabled (ttl=0) to ensure real-time updates."""
     try:
         query = f"SELECT {column} FROM {table} ORDER BY {column} ASC;"
-        # Set ttl=0 to disable caching so changes appear immediately
-        df = conn.query(query, ttl=0)
+        df = conn.query(query, ttl=0) 
         return df[column].dropna().tolist()
     except:
         return []
 
-def add_item(table, column, value):
+def add_item_sql(table, column, value):
     with conn.session as s:
         query = text(f"INSERT INTO {table} ({column}) VALUES (:val) ON CONFLICT DO NOTHING;")
-        s.execute(query, {"val": value})
-        s.commit()
-
-def delete_item(table, column, value):
-    with conn.session as s:
-        query = text(f"DELETE FROM {table} WHERE {column} = :val;")
         s.execute(query, {"val": value})
         s.commit()
 
@@ -47,27 +41,28 @@ def confirm_delete_dialog(table, column, value, label):
     st.warning(f"Are you sure you want to delete **'{value}'** from {label}?")
     st.info("This action cannot be undone.")
     if st.button("Confirm Delete", type="primary", use_container_width=True):
-        delete_item(table, column, value)
+        with conn.session as s:
+            query = text(f"DELETE FROM {table} WHERE {column} = :val;")
+            s.execute(query, {"val": value})
+            s.commit()
         st.toast(f"🗑️ Deleted: {value}")
-        # Force a rerun to clear the item from the list and update links
+        # Valid here: Forces the main page to refresh after the dialog closes
         st.rerun()
 
-# --- Callback Functions to clear text boxes & refresh UI ---
+# --- Callback Functions (Standard reruns happen automatically after these) ---
 def handle_add_proposal():
     val = st.session_state.new_prop.strip()
     if val:
-        add_item("proposals", "title", val)
+        add_item_sql("proposals", "title", val)
         st.toast(f"✅ Added Proposal: {val}")
-        st.session_state.new_prop = "" # Clear input field
-        st.rerun() # Refresh list immediately
+        st.session_state.new_prop = "" # Clear input box
 
 def handle_add_evaluator():
     val = st.session_state.new_eval.strip()
     if val:
-        add_item("evaluators", "name", val)
+        add_item_sql("evaluators", "name", val)
         st.toast(f"✅ Added Evaluator: {val}")
-        st.session_state.new_eval = "" # Clear input field
-        st.rerun() # Refresh list immediately
+        st.session_state.new_eval = "" # Clear input box
 
 # --- Main Admin UI ---
 try:
@@ -85,7 +80,6 @@ with tab1:
     st.text_input("New Proposal Title", key="new_prop")
     st.button("Add Proposal", on_click=handle_add_proposal)
     
-    # Fresh fetch for Proposals
     props = get_items("proposals", "title")
     for p in props:
         c1, c2 = st.columns([6, 1])
@@ -99,7 +93,6 @@ with tab2:
     st.text_input("New Evaluator Name", key="new_eval")
     st.button("Add Evaluator", on_click=handle_add_evaluator)
             
-    # Fresh fetch for Evaluators
     evals = get_items("evaluators", "name")
     for e in evals:
         c1, c2 = st.columns([6, 1])
@@ -110,7 +103,7 @@ with tab2:
 # --- TAB 3: Link Generator ---
 with tab3:
     st.subheader("Personalized Access Links")
-    # Fresh fetch ensures links are always in sync with active evaluators
+    # Fresh fetch ensures links are always in sync with current evaluators
     current_evals = get_items("evaluators", "name") 
     if current_evals:
         base_url = st.text_input("Application Base URL", value="https://your-app.streamlit.app").rstrip('/')
@@ -130,7 +123,8 @@ st.divider()
 
 # --- Executive Summary & Tracker ---
 st.header("📊 Executive Summary")
-df_scores = conn.query("SELECT * FROM scores;", ttl=0) # No cache for real-time results
+# Fetch scores with ttl=0 for real-time dashboard updates
+df_scores = conn.query("SELECT * FROM scores;", ttl=0) 
 
 if not df_scores.empty:
     with st.expander("👀 View Global Performance Summary", expanded=True):

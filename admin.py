@@ -59,21 +59,19 @@ def edit_evaluator_dialog(old_name):
         clean_new_name = new_name.strip()
         
         with conn.session as s:
-            # 1. Update database names in evaluators and scores tables
             s.execute(text("UPDATE evaluators SET name = :new WHERE name = :old"), 
                       {"new": clean_new_name, "old": old_name})
             s.execute(text("UPDATE scores SET evaluator = :new WHERE evaluator = :old"), 
                       {"new": clean_new_name, "old": old_name})
             s.commit()
         
-        # 2. Handle Photo Update
         if new_photo:
             file_path = f"{clean_new_name.replace(' ', '_')}.png"
             try:
                 supabase.storage.from_(BUCKET_NAME).upload(
                     path=file_path, 
                     file=new_photo.getvalue(),
-                    file_options={"content-type": "image/png", "x-upsert": "true"} # CRITICAL: Allows overwriting
+                    file_options={"content-type": "image/png", "x-upsert": "true"}
                 )
                 st.toast("📷 Photo updated successfully!")
             except Exception as e:
@@ -89,21 +87,15 @@ def confirm_delete_dialog(table, column, value):
     st.info("This will also remove any associated photos and scores.")
     
     if st.button("Yes, Delete permanently", type="primary"):
-        # 1. If we are deleting an evaluator, clean up their photo first
         if table == "evaluators":
             try:
                 file_path = f"{value.strip().replace(' ', '_')}.png"
-                # Remove the file from Supabase Storage
                 supabase.storage.from_(BUCKET_NAME).remove([file_path])
                 st.toast(f"🗑️ Photo for {value} deleted.")
             except Exception as e:
-                # We use a silent log here because sometimes a user might not have a photo
                 print(f"Storage cleanup skip/fail: {e}")
 
-        # 2. Delete from the Database
         with conn.session as s:
-            # CASCADE will handle scores if your foreign keys are set up, 
-            # otherwise, this line removes the main record.
             s.execute(text(f"DELETE FROM {table} WHERE {column} = :val"), {"val": value})
             s.commit()
             
@@ -126,8 +118,6 @@ def add_item_sql(table, column, value):
 
 # --- 5. MAIN UI ---
 st.title("🛡️ ASM Admin Control Center")
-
-# --- DEFINE CACHE BUSTER AT TOP OF UI TO PREVENT NAMEERROR ---
 cache_buster = int(time.time())
 
 col_ref1, col_ref2 = st.columns([6, 1])
@@ -138,7 +128,6 @@ if auto_refresh:
 
 tab1, tab2, tab3 = st.tabs(["📋 Proposals", "👤 Evaluators", "🔗 Links"])
 
-# --- TAB 1: PROPOSALS ---
 with tab1:
     st.subheader("Manage Proposals")
     mode_p = st.radio("Add Mode", ["Single", "Bulk"], horizontal=True, key="pmode")
@@ -147,7 +136,7 @@ with tab1:
         if st.button("Add Proposal"):
             if p_name: 
                 add_item_sql("proposals", "title", p_name)
-                st.toast(f"✅ Proposal '{p_name}' added!") # The pop-up
+                st.toast(f"✅ Proposal '{p_name}' added!")
                 time.sleep(1)
                 st.rerun()
     else:
@@ -169,7 +158,6 @@ with tab1:
             if c2.button("✏️", key=f"edit_p_{p}"): edit_proposal_dialog(p)
             if c3.button("🗑️", key=f"del_p_{p}"): confirm_delete_dialog("proposals", "title", p)
 
-# --- TAB 2: EVALUATORS ---
 with tab2:
     st.subheader("Add New Evaluator")
     with st.form("eval_add_form", clear_on_submit=True):
@@ -189,7 +177,7 @@ with tab2:
                         file_options={"content-type": "image/png", "x-upsert": "true"}
                     )
                 
-                st.toast(f"✅ {clean_name} added to the system!") # Pop-up notification
+                st.toast(f"✅ {clean_name} added to the system!")
                 time.sleep(1)
                 st.rerun()
 
@@ -204,7 +192,6 @@ with tab2:
             if c3.button("✏️", key=f"edit_e_{e}"): edit_evaluator_dialog(e)
             if c4.button("🗑️", key=f"del_e_{e}"): confirm_delete_dialog("evaluators", "name", e)
 
-# --- TAB 3: LINKS ---
 with tab3:
     st.subheader("Personalized Access Links")
     evals_list = get_items_sql("evaluators", "name")
@@ -258,15 +245,40 @@ if evals_all:
 st.divider()
 st.header("🚀 Session Control")
 
-# 1. Fetch History to display it
+# 1. Fetch History (with automatic table check)
 try:
     df_history = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
-except:
+except Exception:
+    # If the table doesn't exist, create it via SQL
+    with conn.session as s:
+        s.execute(text("""
+            CREATE TABLE IF NOT EXISTS scores_history AS 
+            SELECT *, NOW() as archive_timestamp FROM scores WHERE 1=0;
+        """))
+        s.commit()
     df_history = pd.DataFrame()
 
 with st.expander(f"📚 View Archived Sessions ({len(df_history)})"):
     if not df_history.empty:
+        # Download Button logic inside the expander
+        csv = df_history.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download History as CSV",
+            data=csv,
+            file_name=f"asm_archive_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+        )
         st.dataframe(df_history, use_container_width=True)
+        
+        # Clear History Option
+        if st.checkbox("Show Danger Zone"):
+            if st.button("🔥 Wipe Archive Permanently", type="secondary"):
+                with conn.session as s:
+                    s.execute(text("TRUNCATE TABLE scores_history;"))
+                    s.commit()
+                st.warning("Archive cleared.")
+                time.sleep(1)
+                st.rerun()
     else:
         st.info("No archived sessions found.")
 
@@ -277,9 +289,7 @@ can_archive = (len(unique_submitted) >= len(evals_all) and len(evals_all) > 0) o
 if st.button("🆕 Archive & Reset Dashboard", type="primary", use_container_width=True, disabled=not can_archive):
     try:
         with conn.session as s:
-            # Move data to history
             s.execute(text("INSERT INTO scores_history SELECT *, NOW() as archive_timestamp FROM scores;"))
-            # Clear the current scores
             s.execute(text("TRUNCATE TABLE scores RESTART IDENTITY CASCADE;"))
             s.commit()
         
@@ -289,10 +299,3 @@ if st.button("🆕 Archive & Reset Dashboard", type="primary", use_container_wid
         st.rerun()
     except Exception as e:
         st.error(f"Archive failed: {e}")
-
-
-
-
-
-
-

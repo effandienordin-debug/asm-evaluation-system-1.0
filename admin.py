@@ -205,3 +205,43 @@ if st.button("🆕 Archive & Reset Dashboard", type="primary", use_container_wid
         st.rerun()
     elif not archive_name:
         st.warning("Please enter a Session Name to archive data.")
+# --- Data Export & History Browser ---
+st.divider()
+st.header("📂 Archive Browser & Data Export")
+
+try:
+    # Fetch all unique session tags from the history table
+    sessions_df = conn.query("SELECT DISTINCT archive_tag FROM history ORDER BY archive_tag DESC;", ttl="10s")
+    
+    if not sessions_df.empty:
+        session_list = sessions_df['archive_tag'].tolist()
+        selected_session = st.selectbox("Select a session to export:", session_list)
+
+        if selected_session:
+            # Fetch full data for the selected session
+            export_df = conn.query(
+                "SELECT * FROM history WHERE archive_tag = :tag;", 
+                params={"tag": selected_session}, 
+                ttl="0s"
+            )
+
+            if not export_df.empty:
+                # Show a preview of the data
+                st.write(f"Previewing data for: **{selected_session}**")
+                st.dataframe(export_df.head(10), use_container_width=True)
+
+                # Convert dataframe to CSV
+                csv = export_df.to_csv(index=False).encode('utf-8')
+
+                # Create the Download Button
+                st.download_button(
+                    label=f"📥 Download {selected_session} as CSV",
+                    data=csv,
+                    file_name=f"ASM_Archive_{selected_session.replace(' ', '_')}.csv",
+                    mime='text/csv',
+                    use_container_width=True
+                )
+    else:
+        st.info("No archived sessions found in the database yet.")
+except Exception as e:
+    st.error(f"Could not load history: {e}")

@@ -13,7 +13,7 @@ from streamlit_autorefresh import st_autorefresh
 # --- 1. CONFIG & CONNECTIONS ---
 st.set_page_config(page_title="ASM Admin Panel", layout="wide")
 
-# Initialize session state for multi-user auth
+# Initialize Session States
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 if "username" not in st.session_state:
@@ -47,36 +47,24 @@ def get_msal_app():
     )
 
 def check_password():
-    if st.session_state["authenticated"]:
+    if st.session_state.get("authenticated"):
         return True
 
-    # Ensure users table exists and has a default admin
-    try:
-        with conn.session as s:
-            s.execute(text("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id SERIAL PRIMARY KEY, 
-                    username TEXT UNIQUE, 
-                    password_hash TEXT, 
-                    role TEXT
-                );
-            """))
-            res = s.execute(text("SELECT count(*) FROM users")).fetchone()
-            if res[0] == 0:
-                # Default local fallback
-                s.execute(text("INSERT INTO users (username, password_hash, role) VALUES ('admin', 'admin123', 'SuperAdmin')"))
-                s.commit()
-    except Exception as e:
-        st.error(f"DB Setup Error: {e}")
-
-    # Handle SSO Callback
+    # --- HANDLE SSO CALLBACK ---
+    # This must run BEFORE the UI stop to catch the redirect from Microsoft
     query_params = st.query_params
     if "code" in query_params:
         app = get_msal_app()
-        result = app.acquire_token_by_authorization_code(query_params["code"], scopes=SCOPE, redirect_uri=REDIRECT_URI)
+        result = app.acquire_token_by_authorization_code(
+            query_params["code"], 
+            scopes=SCOPE, 
+            redirect_uri=REDIRECT_URI
+        )
         if "error" not in result:
             email = result.get("id_token_claims").get("preferred_username")
+            # Check if user exists in your DB
             user_check = conn.query("SELECT username, role FROM users WHERE LOWER(username) = LOWER(:u)", params={"u": email}, ttl=0)
+            
             if not user_check.empty:
                 st.session_state["authenticated"] = True
                 st.session_state["username"] = user_check.iloc[0]['username']
@@ -84,16 +72,16 @@ def check_password():
                 st.query_params.clear()
                 st.rerun()
             else:
-                st.error(f"🚫 Access Denied: {email} is not registered in the system.")
+                st.error(f"🚫 Access Denied: {email} is not an authorized Admin.")
         else:
-            st.error("SSO Authentication Failed.")
+            st.error(f"Authentication Failed: {result.get('error_description')}")
 
-    # Login UI
+    # --- LOGIN UI ---
     st.markdown("<h1 style='text-align: center;'>🛡️ ASM Admin Access</h1>", unsafe_allow_html=True)
     _, center, _ = st.columns([1, 1.5, 1])
     
     with center:
-        # Microsoft SSO Button with target="_top" fix
+        # Microsoft SSO Button with the "target='_top'" fix
         msal_app = get_msal_app()
         auth_url = msal_app.get_authorization_request_url(SCOPE, redirect_uri=REDIRECT_URI)
         st.markdown(f"""
@@ -110,6 +98,7 @@ def check_password():
             u_input = st.text_input("Local Username").strip()
             p_input = st.text_input("Local Password", type="password").strip()
             if st.form_submit_button("Sign In with Password", use_container_width=True):
+                # Verify local user
                 user_data = conn.query("SELECT username, password_hash, role FROM users WHERE LOWER(username) = LOWER(:u)", params={"u": u_input}, ttl=0)
                 if not user_data.empty and str(user_data.iloc[0]['password_hash']) == p_input:
                     st.session_state["authenticated"] = True
@@ -120,7 +109,11 @@ def check_password():
                     st.error("❌ Invalid Credentials")
     return False
 
-# --- 3. INITIALIZE CLIENTS ---
+# Start the login check
+if not check_password():
+    st.stop()
+
+# --- 3. THE REST OF YOUR APP (INITIALIZE CLIENTS ETC) ---
 try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 except:
@@ -405,3 +398,4 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+

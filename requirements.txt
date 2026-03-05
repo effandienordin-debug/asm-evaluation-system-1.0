@@ -7,4 +7,6 @@ supabase
 streamlit-autorefresh
 qrcode[pil]
 matplotlib
+msal
+
 

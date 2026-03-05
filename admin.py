@@ -30,9 +30,8 @@ except Exception as e:
 
 conn = st.connection("postgresql", type="sql")
 
-# --- 2. UPDATED LOGIN LOGIC (Persistent & Role-Based) ---
+# --- 2. UPDATED LOGIN LOGIC ---
 def check_password():
-    """Returns True if the user is authenticated."""
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
 
@@ -47,8 +46,10 @@ def check_password():
                 submit = st.form_submit_button("Sign In", use_container_width=True)
                 
                 if submit:
-                    # Query user from DB
-                    query = text("SELECT username, password_hash, role FROM users WHERE username = :u")
+                    # FIX: Use a plain string instead of text("...")
+                    query = "SELECT username, password_hash, role FROM users WHERE username = :u"
+                    
+                    # conn.query handles the :u parameter binding safely
                     user_data = conn.query(query, params={"u": u_input}, ttl=0)
                     
                     if not user_data.empty and user_data.iloc[0]['password_hash'] == p_input:
@@ -60,9 +61,6 @@ def check_password():
                         st.error("Invalid username or password")
         return False
     return True
-
-if not check_password():
-    st.stop()
 
 # --- 4. THEME & CSS ---
 st.markdown("""
@@ -205,3 +203,4 @@ elif menu_choice == "🔑 User Management":
             st.rerun()
 
 # [Include original logic for "👤 Evaluators & Links" and "📜 History" here]
+

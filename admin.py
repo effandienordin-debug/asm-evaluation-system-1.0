@@ -30,32 +30,62 @@ SUPABASE_URL = load_secret("supabase_url")
 SUPABASE_KEY = load_secret("supabase_key")
 BUCKET_NAME = "evaluator-photos"
 
-# --- 2. LOGIN LOGIC (Database Driven) ---
+# Initialize Database Connection
+conn = st.connection("postgresql", type="sql")
+
+# --- 2. LOGIN LOGIC (Database Driven with Auto-Repair) ---
 def check_password():
     if st.session_state["authenticated"]:
         return True
+
+    # SETUP: Ensure table exists and has at least one user
+    try:
+        with conn.session as s:
+            s.execute(text("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    username TEXT UNIQUE,
+                    password_hash TEXT,
+                    role TEXT
+                );
+            """))
+            # Check if any user exists
+            res = s.execute(text("SELECT count(*) FROM users")).fetchone()
+            if res[0] == 0:
+                # If zero users exist, create the master admin
+                s.execute(text("INSERT INTO users (username, password_hash, role) VALUES ('admin', 'admin123', 'SuperAdmin')"))
+                s.commit()
+    except Exception as e:
+        st.error(f"Database Initialization Error: {e}")
 
     st.markdown("<h1 style='text-align: center;'>🛡️ ASM Admin Access</h1>", unsafe_allow_html=True)
     _, center, _ = st.columns([1, 1.5, 1])
     
     with center:
+        if st.info("Default Login: admin / admin123 (Change this after login!)") if 'res' in locals() and res[0] == 0 else None:
+            pass
+
         with st.form("login_form"):
-            u_input = st.text_input("Username")
-            p_input = st.text_input("Password", type="password")
+            u_input = st.text_input("Username").strip()
+            p_input = st.text_input("Password", type="password").strip()
             submit = st.form_submit_button("Sign In", use_container_width=True)
             
             if submit:
-                # Query plain string to avoid UnhashableParamError
-                query = "SELECT username, password_hash, role FROM users WHERE username = :u"
+                # Query with LOWER() to avoid case-sensitivity issues
+                query = "SELECT username, password_hash, role FROM users WHERE LOWER(username) = LOWER(:u)"
                 user_data = conn.query(query, params={"u": u_input}, ttl=0)
                 
-                if not user_data.empty and user_data.iloc[0]['password_hash'] == p_input:
-                    st.session_state["authenticated"] = True
-                    st.session_state["username"] = user_data.iloc[0]['username']
-                    st.session_state["user_role"] = user_data.iloc[0]['role']
-                    st.rerun()
+                if not user_data.empty:
+                    db_password = str(user_data.iloc[0]['password_hash'])
+                    if db_password == p_input:
+                        st.session_state["authenticated"] = True
+                        st.session_state["username"] = user_data.iloc[0]['username']
+                        st.session_state["user_role"] = user_data.iloc[0]['role']
+                        st.rerun()
+                    else:
+                        st.error("❌ Incorrect Password")
                 else:
-                    st.error("❌ Invalid username or password")
+                    st.error("❌ Username not found")
     return False
 
 # --- 3. INITIALIZE CLIENTS ---
@@ -63,8 +93,6 @@ try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
     st.error("Supabase Connection Error.")
-
-conn = st.connection("postgresql", type="sql")
 
 if not check_password():
     st.stop() 
@@ -120,7 +148,7 @@ def edit_user_dialog(user_id, current_un, current_role):
 def delete_user_confirm(user_id, username):
     st.warning(f"Are you sure you want to delete admin '{username}'?")
     if username == st.session_state["username"]:
-        st.error("You cannot delete your own account while logged in!")
+        st.error("You cannot delete your own account!")
     else:
         if st.button("Yes, Delete User", type="primary"):
             with conn.session as s:
@@ -203,6 +231,7 @@ with st.sidebar:
     
     if st.button("🚪 Logout", use_container_width=True):
         st.session_state["authenticated"] = False
+        st.session_state["username"] = None
         st.rerun()
     
     st.divider()

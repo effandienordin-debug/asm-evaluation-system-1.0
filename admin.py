@@ -97,6 +97,38 @@ def add_user_dialog():
         st.success("User added!")
         st.rerun()
 
+@st.dialog("✏️ Edit System User")
+def edit_user_dialog(user_id, current_un, current_role):
+    new_un = st.text_input("Username", value=current_un)
+    new_pw = st.text_input("New Password (leave blank to keep current)", type="password")
+    new_role = st.selectbox("Role", ["SuperAdmin", "Editor", "Viewer"], 
+                            index=["SuperAdmin", "Editor", "Viewer"].index(current_role))
+    
+    if st.button("Save Changes", type="primary"):
+        with conn.session as s:
+            if new_pw.strip():
+                s.execute(text("UPDATE users SET username = :u, password_hash = :p, role = :r WHERE id = :id"),
+                          {"u": new_un.strip(), "p": new_pw.strip(), "r": new_role, "id": user_id})
+            else:
+                s.execute(text("UPDATE users SET username = :u, role = :r WHERE id = :id"),
+                          {"u": new_un.strip(), "r": new_role, "id": user_id})
+            s.commit()
+        st.success("User updated!")
+        st.rerun()
+
+@st.dialog("🗑️ Delete System User")
+def delete_user_confirm(user_id, username):
+    st.warning(f"Are you sure you want to delete admin '{username}'?")
+    if username == st.session_state["username"]:
+        st.error("You cannot delete your own account while logged in!")
+    else:
+        if st.button("Yes, Delete User", type="primary"):
+            with conn.session as s:
+                s.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+                s.commit()
+            st.success("User deleted.")
+            st.rerun()
+
 @st.dialog("✏️ Edit Proposal")
 def edit_proposal_dialog(old_val):
     new_val = st.text_input("Edit Proposal Title", value=old_val)
@@ -177,14 +209,12 @@ with st.sidebar:
     auto_refresh = st.toggle("🔄 Auto Refresh (15s)", value=False)
     if auto_refresh: st_autorefresh(interval=15000, key="admin_refresh")
     
-    # RBAC: Only SuperAdmin sees User Management
     menu_options = ["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"]
     if st.session_state["user_role"] == "SuperAdmin":
         menu_options.append("🔑 User Management")
         
     menu_choice = st.radio("Navigate to:", menu_options)
     
-    # RBAC: Editor and SuperAdmin can archive
     if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
         st.divider()
         st.subheader("🚀 Session Control")
@@ -202,7 +232,6 @@ with st.sidebar:
 
 if menu_choice == "📊 Tracker":
     st.header("📊 Live Proposal Progress")
-    # Tracker logic (same as original)
     try:
         df_scores = conn.query("SELECT * FROM scores;", ttl=0)
     except: df_scores = pd.DataFrame()
@@ -251,7 +280,6 @@ if menu_choice == "📊 Tracker":
 
 elif menu_choice == "📋 Proposals":
     st.header("📋 Manage Proposals")
-    # RBAC: Viewer cannot add
     if st.session_state["user_role"] != "Viewer":
         p_name = st.text_input("Add Proposal Title")
         if st.button("Add Single"):
@@ -269,7 +297,6 @@ elif menu_choice == "📋 Proposals":
     for p in props:
         c1, c2, c3 = st.columns([5, 1, 1])
         c1.write(f"• {p}")
-        # RBAC: Viewer cannot edit/delete
         if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
             if c2.button("✏️", key=f"edit_p_{p}"): edit_proposal_dialog(p)
             if c3.button("🗑️", key=f"del_p_{p}"): confirm_delete_dialog("proposals", "title", p)
@@ -373,10 +400,42 @@ elif menu_choice == "👤 Evaluators & Links":
 
 elif menu_choice == "🔑 User Management":
     st.header("🔑 System Admin Accounts")
-    if st.button("➕ Add New Admin User"):
-        add_user_dialog()
-    users_df = conn.query("SELECT id, username, role FROM users ORDER BY username ASC;", ttl=0)
-    st.table(users_df)
+    
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("➕ Add New Admin", use_container_width=True):
+            add_user_dialog()
+
+    # READ: Fetch all users
+    users_df = conn.query("SELECT id, username, password_hash, role FROM users ORDER BY id ASC;", ttl=0)
+    
+    if not users_df.empty:
+        # Table Header
+        st.divider()
+        h1, h2, h3, h4 = st.columns([2, 2, 1, 1])
+        h1.write("**Username**")
+        h2.write("**Role**")
+        h3.write("**Edit**")
+        h4.write("**Delete**")
+        st.divider()
+
+        for _, row in users_df.iterrows():
+            c1, c2, c3, c4 = st.columns([2, 2, 1, 1])
+            c1.write(row['username'])
+            
+            # Role Badge Coloring
+            role_color = "#E53E3E" if row['role'] == "SuperAdmin" else "#3182CE" if row['role'] == "Editor" else "#718096"
+            c2.markdown(f"<span style='color:{role_color}; font-weight:bold;'>{row['role']}</span>", unsafe_allow_html=True)
+            
+            # UPDATE
+            if c3.button("✏️", key=f"edit_u_{row['id']}"):
+                edit_user_dialog(row['id'], row['username'], row['role'])
+            
+            # DELETE
+            if c4.button("🗑️", key=f"del_u_{row['id']}"):
+                delete_user_confirm(row['id'], row['username'])
+    else:
+        st.info("No system users found.")
 
 elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")

@@ -30,15 +30,7 @@ SUPABASE_URL = load_secret("supabase_url")
 SUPABASE_KEY = load_secret("supabase_key")
 BUCKET_NAME = "evaluator-photos"
 
-# --- 2. INITIALIZE CLIENTS ---
-try:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
-    st.error("Supabase Connection Error.")
-
-conn = st.connection("postgresql", type="sql")
-
-# --- 3. LOGIN LOGIC (Refactored for strings/persistence) ---
+# --- 2. LOGIN LOGIC (Database Driven) ---
 def check_password():
     if st.session_state["authenticated"]:
         return True
@@ -53,7 +45,7 @@ def check_password():
             submit = st.form_submit_button("Sign In", use_container_width=True)
             
             if submit:
-                # Use plain string query to avoid UnhashableParamError
+                # Query plain string to avoid UnhashableParamError
                 query = "SELECT username, password_hash, role FROM users WHERE username = :u"
                 user_data = conn.query(query, params={"u": u_input}, ttl=0)
                 
@@ -63,8 +55,16 @@ def check_password():
                     st.session_state["user_role"] = user_data.iloc[0]['role']
                     st.rerun()
                 else:
-                    st.error("Invalid username or password")
+                    st.error("❌ Invalid username or password")
     return False
+
+# --- 3. INITIALIZE CLIENTS ---
+try:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as e:
+    st.error("Supabase Connection Error.")
+
+conn = st.connection("postgresql", type="sql")
 
 if not check_password():
     st.stop() 
@@ -146,6 +146,7 @@ def delete_archive_dialog(ts):
         with conn.session as s:
             s.execute(text("DELETE FROM scores_history WHERE archive_timestamp = :ts"), {"ts": ts})
             s.commit()
+        st.success("Record deleted.")
         st.rerun()
 
 # --- 6. HELPER FUNCTIONS ---
@@ -165,24 +166,25 @@ cache_buster = int(time.time())
 
 with st.sidebar:
     st.title("🛡️ ASM Admin")
-    st.write(f"Logged in: **{st.session_state.get('username', 'N/A')}**")
-    st.caption(f"Role: {st.session_state.get('user_role', 'Viewer')}")
+    st.write(f"User: **{st.session_state['username']}**")
+    st.caption(f"Role: {st.session_state['user_role']}")
     
     if st.button("🚪 Logout", use_container_width=True):
         st.session_state["authenticated"] = False
         st.rerun()
-    st.divider()
     
+    st.divider()
     auto_refresh = st.toggle("🔄 Auto Refresh (15s)", value=False)
     if auto_refresh: st_autorefresh(interval=15000, key="admin_refresh")
     
-    menu_list = ["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"]
+    # RBAC: Only SuperAdmin sees User Management
+    menu_options = ["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"]
     if st.session_state["user_role"] == "SuperAdmin":
-        menu_list.append("🔑 User Management")
+        menu_options.append("🔑 User Management")
         
-    menu_choice = st.radio("Navigate to:", menu_list)
+    menu_choice = st.radio("Navigate to:", menu_options)
     
-    # Session control restricted to higher roles
+    # RBAC: Editor and SuperAdmin can archive
     if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
         st.divider()
         st.subheader("🚀 Session Control")
@@ -200,6 +202,7 @@ with st.sidebar:
 
 if menu_choice == "📊 Tracker":
     st.header("📊 Live Proposal Progress")
+    # Tracker logic (same as original)
     try:
         df_scores = conn.query("SELECT * FROM scores;", ttl=0)
     except: df_scores = pd.DataFrame()
@@ -248,9 +251,8 @@ if menu_choice == "📊 Tracker":
 
 elif menu_choice == "📋 Proposals":
     st.header("📋 Manage Proposals")
-    if st.session_state["user_role"] == "Viewer":
-        st.info("View-only access.")
-    else:
+    # RBAC: Viewer cannot add
+    if st.session_state["user_role"] != "Viewer":
         p_name = st.text_input("Add Proposal Title")
         if st.button("Add Single"):
             if p_name: add_item_sql("proposals", "title", p_name); st.rerun()
@@ -267,20 +269,18 @@ elif menu_choice == "📋 Proposals":
     for p in props:
         c1, c2, c3 = st.columns([5, 1, 1])
         c1.write(f"• {p}")
+        # RBAC: Viewer cannot edit/delete
         if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
             if c2.button("✏️", key=f"edit_p_{p}"): edit_proposal_dialog(p)
             if c3.button("🗑️", key=f"del_p_{p}"): confirm_delete_dialog("proposals", "title", p)
 
 elif menu_choice == "👤 Evaluators & Links":
     st.header("👤 Evaluators & Access Links")
-    if st.session_state["user_role"] == "Viewer":
-        st.info("View-only access.")
-    
     col_add, col_links = st.columns([1, 1])
     
     with col_add:
         st.subheader("Add Evaluator")
-        if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
+        if st.session_state["user_role"] != "Viewer":
             with st.form("eval_form", clear_on_submit=True):
                 e_name = st.text_input("Full Name (Official)")
                 e_nick = st.text_input("Nickname (For Login Link)")
@@ -295,7 +295,8 @@ elif menu_choice == "👤 Evaluators & Links":
                             path = f"{e_name.strip().replace(' ', '_')}.png"
                             supabase.storage.from_(BUCKET_NAME).upload(path=path, file=e_file.getvalue(), file_options={"content-type": "image/png", "x-upsert": "true"})
                         st.rerun()
-        else: st.write("Editor permissions required to add evaluators.")
+        else:
+            st.info("View-only mode.")
 
     with col_links:
         st.subheader("Access Links")
@@ -324,7 +325,7 @@ elif menu_choice == "👤 Evaluators & Links":
                         st.image(buf.getvalue(), caption=f"Login: {d['Nickname']}", use_container_width=True)
 
     st.divider()
-    st.subheader("⚙️ Global Evaluator Access")
+    st.subheader("⚙️ System Management")
     with conn.session as s:
         s.execute(text("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);"))
         s.execute(text("INSERT INTO settings (key, value) VALUES ('evaluator_password', '1234') ON CONFLICT (key) DO NOTHING;"))
@@ -335,16 +336,20 @@ elif menu_choice == "👤 Evaluators & Links":
 
     col_pass1, col_pass2 = st.columns([2, 1])
     new_eval_pass = col_pass1.text_input("Set Global Evaluator Password", value=current_db_pass) 
-    if col_pass2.button("Update Password", use_container_width=True, type="primary"):
-        with conn.session as s:
-            s.execute(text("UPDATE settings SET value = :v WHERE key = 'evaluator_password'"), {"v": new_eval_pass.strip()})
-            s.commit()
-        st.success("✅ Password updated!")
-        st.rerun()
+    
+    if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
+        if col_pass2.button("Update Password", use_container_width=True, type="primary"):
+            with conn.session as s:
+                s.execute(text("UPDATE settings SET value = :v WHERE key = 'evaluator_password'"), {"v": new_eval_pass.strip()})
+                s.commit()
+            st.success(f"✅ Password updated to: {new_eval_pass}")
+            time.sleep(1)
+            st.rerun()
 
     st.write("---")
-    st.subheader("🔓 User Lock Status")
+    st.subheader("🔓 Access Control")
     status_df = conn.query("SELECT name, nickname, has_submitted FROM evaluators ORDER BY name ASC;", ttl=0)
+
     for _, row in status_df.iterrows():
         e = row['name']
         nick = row['nickname']
@@ -353,38 +358,48 @@ elif menu_choice == "👤 Evaluators & Links":
         img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
         c1.markdown(f'<img src="{img_url}" style="width:40px; height:40px; border-radius:50%; object-fit:cover;" onerror="this.src=\'https://ui-avatars.com/api/?name={e}\'">', unsafe_allow_html=True)
         c2.write(f"**{nick}** ({e}) \n*Status: {'🔒 LOCKED' if is_locked else '🔓 OPEN'}*")
+        
         if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
             if c3.button("✏️", key=f"ed_{e}"): edit_evaluator_dialog(e, nick)
             if c4.button("🗑️", key=f"dl_{e}"): confirm_delete_dialog("evaluators", "name", e)
-            if is_locked and c5.button("Reset Access", key=f"re_{e}", use_container_width=True):
-                with conn.session as s:
-                    s.execute(text("UPDATE evaluators SET has_submitted = FALSE WHERE name = :n"), {"n": e})
-                    s.commit()
-                st.rerun()
-            elif not is_locked: c5.button("Session Active", key=f"pr_{e}", disabled=True, use_container_width=True)
+            if is_locked:
+                if c5.button("Reset Access", key=f"re_{e}", use_container_width=True):
+                    with conn.session as s:
+                        s.execute(text("UPDATE evaluators SET has_submitted = FALSE WHERE name = :n"), {"n": e})
+                        s.commit()
+                    st.rerun()
+            else:
+                c5.button("Session Active", key=f"pr_{e}", disabled=True, use_container_width=True)
 
 elif menu_choice == "🔑 User Management":
     st.header("🔑 System Admin Accounts")
-    if st.button("➕ Add New User"): add_user_dialog()
+    if st.button("➕ Add New Admin User"):
+        add_user_dialog()
     users_df = conn.query("SELECT id, username, role FROM users ORDER BY username ASC;", ttl=0)
     st.table(users_df)
 
 elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
-    df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
-    if not df_hist.empty:
-        h_cols = st.columns([2, 2, 2, 1])
-        h_cols[0].write("**Date**")
-        h_cols[1].write("**Evaluator**")
-        h_cols[2].write("**Proposal**")
-        h_cols[3].write("**Action**")
-        st.divider()
-        for i, row in df_hist.iterrows():
-            c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
-            ts = row['archive_timestamp']
-            c1.write(ts.strftime("%Y-%m-%d %H:%M") if hasattr(ts, 'strftime') else str(ts))
-            c2.write(row['evaluator'])
-            c3.write(row['proposal_title'])
-            if st.session_state["user_role"] == "SuperAdmin":
-                if c4.button("🗑️", key=f"del_hist_{i}"): delete_archive_dialog(row['archive_timestamp'])
-    else: st.info("No archived records found.")
+    try:
+        df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
+        if not df_hist.empty:
+            h_cols = st.columns([2, 2, 2, 1])
+            h_cols[0].write("**Date**")
+            h_cols[1].write("**Evaluator**")
+            h_cols[2].write("**Proposal**")
+            h_cols[3].write("**Action**")
+            st.divider()
+            for i, row in df_hist.iterrows():
+                c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
+                ts = row['archive_timestamp']
+                date_str = ts.strftime("%Y-%m-%d %H:%M") if hasattr(ts, 'strftime') else str(ts)
+                c1.write(date_str)
+                c2.write(row['evaluator'])
+                c3.write(row['proposal_title'])
+                if st.session_state["user_role"] == "SuperAdmin":
+                    if c4.button("🗑️", key=f"del_hist_{i}"):
+                        delete_archive_dialog(row['archive_timestamp'])
+        else:
+            st.info("No archived records found.")
+    except Exception as e:
+        st.error(f"Error loading history: {e}")

@@ -3,6 +3,7 @@ import pandas as pd
 import time
 import qrcode
 import re
+import msal  # Add this to your requirements.txt
 from io import BytesIO
 from datetime import datetime
 from sqlalchemy import text
@@ -12,7 +13,6 @@ from streamlit_autorefresh import st_autorefresh
 # --- 1. CONFIG & CONNECTIONS ---
 st.set_page_config(page_title="ASM Admin Panel", layout="wide")
 
-# Initialize Session State immediately to prevent KeyErrors
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 if "username" not in st.session_state:
@@ -21,77 +21,97 @@ if "user_role" not in st.session_state:
     st.session_state["user_role"] = "Viewer"
 
 def load_secret(key):
-    if key in st.secrets:
-        return st.secrets[key]
-    st.error(f"❌ Missing Secret: **{key}**")
-    st.stop()
+    if key in st.secrets: return st.secrets[key]
+    st.error(f"❌ Missing Secret: **{key}**"); st.stop()
+
+# Load Azure Secrets
+CLIENT_ID = load_secret("azure_client_id")
+CLIENT_SECRET = load_secret("azure_client_secret")
+TENANT_ID = load_secret("azure_tenant_id")
+REDIRECT_URI = load_secret("azure_redirect_uri")
+AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
+SCOPE = ["User.Read"]
 
 SUPABASE_URL = load_secret("supabase_url")
 SUPABASE_KEY = load_secret("supabase_key")
 BUCKET_NAME = "evaluator-photos"
-
-# Initialize Database Connection
 conn = st.connection("postgresql", type="sql")
 
-# --- 2. LOGIN LOGIC (Database Driven with Auto-Repair) ---
+# --- 2. SSO & LOGIN LOGIC ---
+def get_msal_app():
+    return msal.ConfidentialClientApplication(CLIENT_ID, authority=AUTHORITY, client_credential=CLIENT_SECRET)
+
 def check_password():
     if st.session_state["authenticated"]:
         return True
 
-    # SETUP: Ensure table exists and has at least one user
+    # SETUP: Ensure table exists
     try:
         with conn.session as s:
-            s.execute(text("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id SERIAL PRIMARY KEY,
-                    username TEXT UNIQUE,
-                    password_hash TEXT,
-                    role TEXT
-                );
-            """))
-            # Check if any user exists
+            s.execute(text("CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, username TEXT UNIQUE, password_hash TEXT, role TEXT);"))
             res = s.execute(text("SELECT count(*) FROM users")).fetchone()
             if res[0] == 0:
-                # If zero users exist, create the master admin
                 s.execute(text("INSERT INTO users (username, password_hash, role) VALUES ('admin', 'admin123', 'SuperAdmin')"))
                 s.commit()
     except Exception as e:
-        st.error(f"Database Initialization Error: {e}")
+        st.error(f"DB Error: {e}")
 
+    # --- SSO HANDLING ---
+    query_params = st.query_params
+    if "code" in query_params:
+        app = get_msal_app()
+        result = app.acquire_token_by_authorization_code(query_params["code"], scopes=SCOPE, redirect_uri=REDIRECT_URI)
+        if "error" not in result:
+            email = result.get("id_token_claims").get("preferred_username")
+            # Check if this Microsoft user is allowed in our DB
+            user_check = conn.query("SELECT username, role FROM users WHERE LOWER(username) = LOWER(:u)", params={"u": email}, ttl=0)
+            if not user_check.empty:
+                st.session_state["authenticated"] = True
+                st.session_state["username"] = user_check.iloc[0]['username']
+                st.session_state["user_role"] = user_check.iloc[0]['role']
+                st.query_params.clear()
+                st.rerun()
+            else:
+                st.error(f"🚫 Access Denied: {email} is not registered in the Admin System.")
+        else:
+            st.error("SSO Authentication Failed.")
+
+    # --- UI DISPLAY ---
     st.markdown("<h1 style='text-align: center;'>🛡️ ASM Admin Access</h1>", unsafe_allow_html=True)
     _, center, _ = st.columns([1, 1.5, 1])
     
     with center:
-        if st.info("Default Login: admin / admin123 (Change this after login!)") if 'res' in locals() and res[0] == 0 else None:
-            pass
+        # Microsoft SSO Button
+        app = get_msal_app()
+        auth_url = app.get_authorization_request_url(SCOPE, redirect_uri=REDIRECT_URI)
+        st.markdown(f"""
+            <a href="{auth_url}" target="_self" style="text-decoration: none;">
+                <div style="background-color: #2F2F2F; color: white; padding: 10px; border-radius: 5px; text-align: center; font-weight: bold; margin-bottom: 20px; border: 1px solid #444;">
+                    Sign in with Microsoft 365
+                </div>
+            </a>
+        """, unsafe_allow_html=True)
+
+        st.markdown("<p style='text-align: center; color: gray;'>- OR -</p>", unsafe_allow_html=True)
 
         with st.form("login_form"):
-            u_input = st.text_input("Username").strip()
-            p_input = st.text_input("Password", type="password").strip()
-            submit = st.form_submit_button("Sign In", use_container_width=True)
-            
-            if submit:
-                # Query with LOWER() to avoid case-sensitivity issues
-                query = "SELECT username, password_hash, role FROM users WHERE LOWER(username) = LOWER(:u)"
-                user_data = conn.query(query, params={"u": u_input}, ttl=0)
-                
-                if not user_data.empty:
-                    db_password = str(user_data.iloc[0]['password_hash'])
-                    if db_password == p_input:
-                        st.session_state["authenticated"] = True
-                        st.session_state["username"] = user_data.iloc[0]['username']
-                        st.session_state["user_role"] = user_data.iloc[0]['role']
-                        st.rerun()
-                    else:
-                        st.error("❌ Incorrect Password")
+            u_input = st.text_input("Local Username").strip()
+            p_input = st.text_input("Local Password", type="password").strip()
+            if st.form_submit_button("Sign In with Password", use_container_width=True):
+                user_data = conn.query("SELECT username, password_hash, role FROM users WHERE LOWER(username) = LOWER(:u)", params={"u": u_input}, ttl=0)
+                if not user_data.empty and str(user_data.iloc[0]['password_hash']) == p_input:
+                    st.session_state["authenticated"] = True
+                    st.session_state["username"] = user_data.iloc[0]['username']
+                    st.session_state["user_role"] = user_data.iloc[0]['role']
+                    st.rerun()
                 else:
-                    st.error("❌ Username not found")
+                    st.error("❌ Invalid Credentials")
     return False
 
 # --- 3. INITIALIZE CLIENTS ---
 try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
+except:
     st.error("Supabase Connection Error.")
 
 if not check_password():
@@ -491,3 +511,4 @@ elif menu_choice == "📜 History":
             st.info("No archived records found.")
     except Exception as e:
         st.error(f"Error loading history: {e}")
+

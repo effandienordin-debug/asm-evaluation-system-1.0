@@ -175,6 +175,35 @@ def add_user_dialog():
         st.success("User added!")
         st.rerun()
 
+@st.dialog("✏️ Edit System User")
+def edit_user_dialog(user_id, current_un, current_role):
+    new_un = st.text_input("Username", value=current_un)
+    new_pw = st.text_input("New Password (blank to keep current)", type="password")
+    new_role = st.selectbox("Role", ["SuperAdmin", "Editor", "Viewer"], 
+                            index=["SuperAdmin", "Editor", "Viewer"].index(current_role))
+    if st.button("Save Changes", type="primary"):
+        with conn.session as s:
+            if new_pw.strip():
+                s.execute(text("UPDATE users SET username = :u, password_hash = :p, role = :r WHERE id = :id"),
+                          {"u": new_un.strip(), "p": new_pw.strip(), "r": new_role, "id": user_id})
+            else:
+                s.execute(text("UPDATE users SET username = :u, role = :r WHERE id = :id"),
+                          {"u": new_un.strip(), "r": new_role, "id": user_id})
+            s.commit()
+        st.rerun()
+
+@st.dialog("🗑️ Delete System User")
+def delete_user_confirm(user_id, username):
+    st.warning(f"Delete admin '{username}'?")
+    if username == st.session_state["username"]:
+        st.error("You cannot delete your own account!")
+    else:
+        if st.button("Yes, Delete User", type="primary"):
+            with conn.session as s:
+                s.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+                s.commit()
+            st.rerun()
+
 @st.dialog("🗑️ Confirm Delete")
 def confirm_delete_dialog(table, column, value):
     st.warning(f"Delete '{value}' permanently?")

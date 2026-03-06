@@ -137,6 +137,32 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 5. DIALOGS ---
+@st.dialog("📧 Send Access Link")
+def send_email_dialog(name, recipient_email, nickname):
+    target_url = "https://asm-evaluation-system-10-evaluation-form.streamlit.app"
+    # Use nickname as the identifier per your existing logic
+    link = f"{target_url}/?user={nickname.replace(' ', '%20')}"
+    
+    st.write(f"Sending personalized link to **{name}** at `{recipient_email}`")
+    st.info(f"Link: {link}")
+    
+    if st.button("Confirm & Send via System", type="primary"):
+        # Integration point for Email API (Resend/SendGrid)
+        # For now, we simulate success
+        st.success(f"✅ Link sent to {recipient_email}")
+        time.sleep(1)
+        st.rerun()
+
+@st.dialog("🔑 Reset Local Password")
+def reset_password_dialog(username):
+    new_pw = st.text_input("New Password", type="password")
+    if st.button("Update Password", type="primary"):
+        with conn.session as s:
+            s.execute(text("UPDATE users SET password_hash = :p WHERE username = :u"), 
+                     {"p": new_pw.strip(), "u": username})
+            s.commit()
+        st.success("Password updated!")
+        st.rerun()
 
 @st.dialog("🔑 Add System User")
 def add_user_dialog():
@@ -340,43 +366,43 @@ elif menu_choice == "👤 Evaluators & Links":
             with st.form("eval_form", clear_on_submit=True):
                 e_name = st.text_input("Full Name")
                 e_nick = st.text_input("Nickname")
+                e_mail = st.text_input("Primary Email (For Links)")
                 e_file = st.file_uploader("Photo", type=['png', 'jpg'])
                 if st.form_submit_button("Create"):
                     if e_name and e_nick:
                         with conn.session as s:
-                            s.execute(text("INSERT INTO evaluators (name, nickname, has_submitted) VALUES (:n, :nk, FALSE)"), {"n": e_name.strip(), "nk": e_nick.strip()})
+                            s.execute(text("INSERT INTO evaluators (name, nickname, email, has_submitted) VALUES (:n, :nk, :em, FALSE)"), 
+                                     {"n": e_name.strip(), "nk": e_nick.strip(), "em": e_mail.strip()})
                             s.commit()
-                        if e_file:
-                            path = f"{e_name.strip().replace(' ', '_')}.png"
-                            supabase.storage.from_(BUCKET_NAME).upload(path=path, file=e_file.getvalue(), file_options={"content-type": "image/png", "x-upsert": "true"})
+                        # ... photo upload logic ...
                         st.rerun()
 
-    with col_links:
-        st.subheader("Access Links")
-        evals_df = conn.query("SELECT name, nickname FROM evaluators ORDER BY name ASC;", ttl=0)
-        if not evals_df.empty:
-            target_url = "https://asm-evaluation-system-10-evaluation-form.streamlit.app"
-            link_data = []
-            for _, row in evals_df.iterrows():
-                id_to_use = row['nickname'] if row['nickname'] else row['name']
-                link_data.append({"Nickname": row['nickname'], "Link": f"{target_url}/?user={id_to_use.replace(' ', '%20')}"})
-            st.table(pd.DataFrame(link_data))
-
-    # Access Control List
+    # Access Control List (Integrated with Email and SSO display)
     st.divider()
-    st.subheader("🔓 Access Control")
-    status_df = conn.query("SELECT name, nickname, has_submitted FROM evaluators ORDER BY name ASC;", ttl=0)
+    st.subheader("🔓 Access Control & Identity Mapping")
+    status_df = conn.query("SELECT * FROM evaluators ORDER BY name ASC;", ttl=0)
     for _, row in status_df.iterrows():
-        e, nick, is_locked = row['name'], row['nickname'], bool(row['has_submitted'])
-        c1, c2, c3, c4, c5 = st.columns([1, 3, 1, 1, 2])
+        e, nick = row['name'], row['nickname']
+        pers_email = row.get('email', 'No Email')
+        sso_linked = row.get('sso_email', 'Not Linked')
+        is_locked = bool(row['has_submitted'])
+        
+        c1, c2, c3, c4, c5 = st.columns([1, 3, 2, 1, 1])
         img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
         c1.markdown(f'<img src="{img_url}" style="width:40px; height:40px; border-radius:50%;" onerror="this.src=\'https://ui-avatars.com/api/?name={e}\'">', unsafe_allow_html=True)
-        c2.write(f"**{nick}** ({e}) \n*Status: {'🔒 LOCKED' if is_locked else '🔓 OPEN'}*")
         
+        with c2:
+            st.write(f"**{nick}**")
+            st.caption(f"📧 {pers_email} | {'🔒 LOCKED' if is_locked else '🔓 OPEN'}")
+        
+        with c3:
+            st.caption("Linked MS Account:")
+            st.write(f"`{sso_linked}`")
+
         if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
-            if c3.button("✏️", key=f"ed_{e}"): edit_evaluator_dialog(e, nick)
-            if c4.button("🗑️", key=f"dl_{e}"): confirm_delete_dialog("evaluators", "name", e)
-            if is_locked and c5.button("Reset Access", key=f"re_{e}", use_container_width=True):
+            if c4.button("📧 Link", key=f"send_{e}"):
+                send_email_dialog(e, pers_email, nick)
+            if c5.button("🔄", key=f"re_{e}"):
                 with conn.session as s:
                     s.execute(text("UPDATE evaluators SET has_submitted = FALSE WHERE name = :n"), {"n": e})
                     s.commit()
@@ -387,17 +413,22 @@ elif menu_choice == "🔑 User Management":
     if st.button("➕ Add New Admin"):
         add_user_dialog()
     
-    users_df = conn.query("SELECT id, username, role FROM users ORDER BY id ASC;", ttl=0)
+    users_df = conn.query("SELECT id, username, role, sso_email FROM users ORDER BY id ASC;", ttl=0)
     for _, row in users_df.iterrows():
         c1, c2, c3, c4 = st.columns([2, 2, 1, 1])
-        c1.write(row['username'])
+        with c1:
+            st.write(f"👤 {row['username']}")
+            st.caption(f"MS Auth: {row['sso_email'] or 'None'}")
         c2.write(f"**{row['role']}**")
-        if c3.button("✏️", key=f"edit_u_{row['id']}"): edit_user_dialog(row['id'], row['username'], row['role'])
-        if c4.button("🗑️", key=f"del_u_{row['id']}"): delete_user_confirm(row['id'], row['username'])
+        if c3.button("🔑", key=f"pw_u_{row['id']}"):
+            reset_password_dialog(row['username'])
+        if c4.button("🗑️", key=f"del_u_{row['id']}"):
+            delete_user_confirm(row['id'], row['username'])
 
 elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 

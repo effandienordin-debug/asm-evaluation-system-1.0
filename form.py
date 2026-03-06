@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import time
 import re
-import msal
 from datetime import datetime
 from sqlalchemy import text
 from streamlit_autorefresh import st_autorefresh
@@ -17,89 +16,37 @@ CRITERIA = [
     ('Timeline Readiness', 0.10), ('Execution Strategy', 0.15)
 ]
 
+# Set to wide to accommodate the new "Combined With" column
 st.set_page_config(page_title="ASM Evaluator Entry", layout="wide")
 
-# --- 2. DATABASE & SSO CONFIG ---
+# --- 2. DATABASE CONNECTION ---
 conn = st.connection("postgresql", type="sql")
 
-def load_secret(key):
-    if key in st.secrets:
-        return st.secrets[key]
-    st.error(f"❌ Missing Secret: **{key}**")
-    st.stop()
-
-# Azure SSO Config
-CLIENT_ID = load_secret("azure_client_id")
-CLIENT_SECRET = load_secret("azure_client_secret")
-TENANT_ID = load_secret("azure_tenant_id")
-REDIRECT_URI = load_secret("azure_redirect_uri")
-AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
-SCOPE = ["User.Read"]
-
-# --- 3. LOGIN LOGIC (SSO + LOCAL) ---
-def get_msal_app():
-    return msal.ConfidentialClientApplication(
-        CLIENT_ID, authority=AUTHORITY, client_credential=CLIENT_SECRET
-    )
-
+# --- 3. LOGIN LOGIC ---
 def check_password():
-    if st.session_state.get("authenticated"):
-        return True
+    def password_entered():
+        # Fetch fresh password from DB
+        try:
+            pass_df = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
+            db_password = pass_df.iloc[0]['value'] if not pass_df.empty else None
+        except:
+            db_password = None
+        
+        if st.session_state["password_input"] == db_password:
+            st.session_state["password_correct"] = True
+        else:
+            st.session_state["password_correct"] = False
 
-    # Handle SSO Callback
-    query_params = st.query_params
-    if "code" in query_params:
-        app = get_msal_app()
-        result = app.acquire_token_by_authorization_code(
-            query_params["code"], 
-            scopes=SCOPE, 
-            redirect_uri=REDIRECT_URI
-        )
-        if "error" not in result:
-            sso_email = result.get("id_token_claims").get("preferred_username")
-            sso_name = result.get("id_token_claims").get("name")
-            
-            st.session_state["authenticated"] = True
-            st.session_state["sso_info"] = {"email": sso_email, "name": sso_name}
-            
-            # IDENTITY MAPPING: Update evaluator record with their SSO email
-            user_id = query_params.get("user")
-            if user_id:
-                with conn.session as s:
-                    s.execute(text("UPDATE evaluators SET sso_email = :sso WHERE nickname = :nick OR name = :nick"), 
-                             {"sso": sso_email, "nick": user_id})
-                    s.commit()
-            
-            st.query_params.clear()
-            if user_id: 
-                st.query_params["user"] = user_id
-            st.rerun()
-
-    # Login UI
-    st.markdown("<h1 style='text-align: center;'>🛡️ ASM Evaluator Access</h1>", unsafe_allow_html=True)
-    
-    _, center, _ = st.columns([1, 1.5, 1])
-    with center:
-        msal_app = get_msal_app()
-        auth_url = msal_app.get_authorization_request_url(SCOPE, redirect_uri=REDIRECT_URI)
-        st.link_button("󰊯 Sign in with Microsoft 365", auth_url, type="primary", use_container_width=True)
-
-        st.markdown("<p style='text-align: center; color: gray; margin: 15px 0;'>- OR -</p>", unsafe_allow_html=True)
-
-        with st.form("local_login"):
-            p_input = st.text_input("Access Password", type="password")
-            if st.form_submit_button("Enter with Password", use_container_width=True):
-                try:
-                    pass_df = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
-                    if not pass_df.empty and p_input == pass_df.iloc[0]['value']:
-                        st.session_state["authenticated"] = True
-                        st.session_state["sso_info"] = None
-                        st.rerun()
-                    else:
-                        st.error("❌ Incorrect Password")
-                except:
-                    st.error("Database error.")
-    return False
+    if "password_correct" not in st.session_state:
+        st.title("🔐 ASM Evaluator Login")
+        st.text_input("Enter Access Password", type="password", on_change=password_entered, key="password_input")
+        return False
+    elif not st.session_state["password_correct"]:
+        st.title("🔐 ASM Secure Access")
+        st.text_input("Please enter the access password", type="password", on_change=password_entered, key="password_input")
+        st.error("😕 Password incorrect")
+        return False
+    return True
 
 if not check_password():
     st.stop()
@@ -155,7 +102,7 @@ try:
 except:
     pass
 
-# --- 8. INITIALIZE STATE ---
+# --- 8. INITIALIZE STATE & PENDING REDIRECTS ---
 if "proposal_selector" not in st.session_state:
     st.session_state.proposal_selector = "-- Select --"
 
@@ -165,38 +112,23 @@ if st.session_state.get("pending_nav"):
     del st.session_state["pending_nav"]
     st.rerun()
 
-# --- 9. HEADER (With SSO Info) ---
+# --- 9. HEADER ---
 cache_buster = int(datetime.now().timestamp())
-col_img, col_txt, col_auth = st.columns([1, 2.5, 1.5])
-
+col_img, col_txt = st.columns([1, 4])
 with col_img:
     clean_name = current_user.replace(' ', '_')
     img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{clean_name}.png?t={cache_buster}"
     st.markdown(f'<div style="text-align: center;"><img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; border: 3px solid #1E3A8A;" onerror="this.src=\'https://ui-avatars.com/api/?name={current_user}\'"></div>', unsafe_allow_html=True)
-
 with col_txt:
     st.title(f"Welcome, {current_user}")
     st.write("Official ASM Evaluation Portal")
-
-with col_auth:
-    sso = st.session_state.get("sso_info")
-    if sso:
-        st.success(f"Verified: {sso['name']}")
-        st.caption(f"MS: {sso['email']}")
-    else:
-        st.info("Logged in via Password")
-    
-    if st.button("🚪 Logout", use_container_width=True):
-        st.session_state["authenticated"] = False
-        st.rerun()
-
-st.divider()
 
 # --- 10. PROGRESS DATA FETCH ---
 try:
     scored_df = conn.query("SELECT proposal_title, total, recommendation, comments FROM scores WHERE evaluator = :ev", params={"ev": current_user}, ttl=0)
     completed_proposals = scored_df['proposal_title'].tolist() if not scored_df.empty else []
     
+    # Extract Merge Target from comments
     def extract_merge_target(comment):
         if pd.isna(comment): return ""
         match = re.search(r"\[MERGE WITH: (.*?)\]", str(comment))
@@ -226,7 +158,7 @@ if "summary_table" in st.session_state:
         st.session_state.summary_table["selection"]["rows"] = []
         st.rerun()
 
-# --- 12. EVALUATION FORM ---
+# --- 12. EVALUATION FORM & NAVIGATION ---
 selected_proposal = st.selectbox(
     "Select Proposal Title", 
     ["-- Select --"] + PROPOSALS,
@@ -234,6 +166,8 @@ selected_proposal = st.selectbox(
 )
 
 if selected_proposal != "-- Select --":
+    draft_key = f"draft_{current_user}_{selected_proposal}"
+    
     query = "SELECT * FROM scores WHERE evaluator = :ev AND proposal_title = :prop LIMIT 1;"
     df_match = conn.query(query, params={"ev": current_user, "prop": selected_proposal}, ttl=0)
     existing_data = df_match.iloc[0] if not df_match.empty else None
@@ -245,12 +179,15 @@ if selected_proposal != "-- Select --":
         st.success(f"✅ Record found for: {selected_proposal}")
         st.metric("Your Total Score", f"{existing_data['total']} / 5.0")
         
-        c_ed, c_bk = st.columns(2)
-        with c_ed: st.button("✏️ Edit Scores", use_container_width=True, on_click=enable_editing)
-        with c_bk: st.button("⬅️ Back to Summary", use_container_width=True, on_click=nav_to_summary)
+        col_edit, col_back = st.columns(2)
+        with col_edit:
+            st.button("✏️ Edit Scores", use_container_width=True, on_click=enable_editing)
+        with col_back:
+            st.button("⬅️ Back to Summary", use_container_width=True, on_click=nav_to_summary)
     else:
         with st.form("evaluation_form"):
             st.subheader(f"Evaluation: {selected_proposal}")
+            
             inputs = {}
             criteria_met = 0
             for name, weight in CRITERIA:
@@ -259,7 +196,10 @@ if selected_proposal != "-- Select --":
                 inputs[name] = st.number_input(f"{name} ({int(weight*100)}%)", 0.0, 5.0, default_val, 0.1)
                 if inputs[name] > 0: criteria_met += 1
             
+            st.write(f"Criteria Completed: {criteria_met}/{len(CRITERIA)}")
             st.progress(criteria_met / len(CRITERIA))
+
+            # Raw comment handling
             raw_comm = str(existing_data['comments']) if existing_data is not None else ""
             clean_comm = re.sub(r"\[MERGE WITH:.*?\] ", "", raw_comm)
             user_comments = st.text_area("Comments / Remarks", value=clean_comm)
@@ -274,15 +214,23 @@ if selected_proposal != "-- Select --":
             if recom == "Combine/Merge":
                 existing_target = extract_merge_target(raw_comm)
                 other_proposals = [p for p in PROPOSALS if p != selected_proposal]
-                try: target_idx = other_proposals.index(existing_target)
-                except: target_idx = 0
+                try:
+                    target_idx = other_proposals.index(existing_target)
+                except:
+                    target_idx = 0
                 merge_target = st.selectbox("Combine with which proposal?", other_proposals, index=target_idx)
 
             col_sub, col_can = st.columns(2)
-            if col_sub.form_submit_button("📤 Submit Evaluation", use_container_width=True, type="primary"):
+            with col_sub:
+                submit = st.form_submit_button("📤 Submit Evaluation", use_container_width=True, type="primary")
+            with col_can:
+                cancel = st.form_submit_button("❌ Cancel", use_container_width=True)
+
+            if submit:
                 w_sum = sum(inputs[name] * weight for name, weight in CRITERIA if inputs[name] > 0)
                 w_used = sum(weight for name, weight in CRITERIA if inputs[name] > 0)
                 final_total = round(w_sum / w_used, 2) if w_used > 0 else 0.0
+
                 final_comments = user_comments
                 if recom == "Combine/Merge" and merge_target:
                     final_comments = f"[MERGE WITH: {merge_target}] {user_comments}"
@@ -291,22 +239,28 @@ if selected_proposal != "-- Select --":
                     s.execute(text("""INSERT INTO scores (evaluator, proposal_title, strategic_alignment, potential_impact, feasibility, budget_justification, timeline_readiness, execution_strategy, total, recommendation, comments, last_updated)
                                       VALUES (:ev, :prop, :s1, :s2, :s3, :s4, :s5, :s6, :tot, :rec, :comm, :ts)
                                       ON CONFLICT (evaluator, proposal_title) DO UPDATE SET 
-                                      strategic_alignment=EXCLUDED.strategic_alignment, total=EXCLUDED.total, recommendation=EXCLUDED.recommendation, comments=EXCLUDED.comments, last_updated=EXCLUDED.last_updated"""),
+                                      strategic_alignment=EXCLUDED.strategic_alignment, potential_impact=EXCLUDED.potential_impact,
+                                      feasibility=EXCLUDED.feasibility, budget_justification=EXCLUDED.budget_justification,
+                                      timeline_readiness=EXCLUDED.timeline_readiness, execution_strategy=EXCLUDED.execution_strategy,
+                                      total=EXCLUDED.total, recommendation=EXCLUDED.recommendation, comments=EXCLUDED.comments, last_updated=EXCLUDED.last_updated"""),
                               {"ev": current_user, "prop": selected_proposal, "s1": inputs['Strategic Alignment'], "s2": inputs['Potential Impact'], 
                                "s3": inputs['Feasibility'], "s4": inputs['Budget Justification'], "s5": inputs['Timeline Readiness'], 
                                "s6": inputs['Execution Strategy'], "tot": final_total, "rec": recom, "comm": final_comments, "ts": datetime.now()})
                     s.commit()
+                
                 st.session_state.pending_nav = True
-                st.rerun()
-            if col_can.form_submit_button("❌ Cancel", use_container_width=True):
-                st.session_state.proposal_selector = "-- Select --"
+                st.success("Evaluation Saved!")
+                time.sleep(1)
                 st.rerun()
 
 else:
     # --- 13. SUMMARY DASHBOARD ---
     st.subheader("📊 Your Evaluation Summary")
+    
     if not scored_df.empty:
         summary_display = scored_df.copy()
+
+        # Sort Logic: MERGE (1) -> Others
         def get_status_info(rec):
             if rec == "Combine/Merge": return "🔵 MERGE", 1
             if rec == "Approve": return "🟢 Approve", 2
@@ -317,12 +271,40 @@ else:
         status_data = summary_display["recommendation"].apply(get_status_info)
         summary_display["Status"] = [x[0] for x in status_data]
         summary_display["sort_priority"] = [x[1] for x in status_data]
-        summary_display = summary_display.rename(columns={"proposal_title": "Proposal Name", "total": "Score", "merge_target": "Combined With", "display_comments": "Remarks"})
-        summary_display = summary_display.sort_values("sort_priority").drop(columns=["sort_priority"])
         
-        st.dataframe(summary_display[["Status", "Proposal Name", "Combined With", "Score", "Remarks"]], 
-                     use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", key="summary_table",
-                     column_config={"Score": st.column_config.ProgressColumn("Score", format="%.1f", min_value=0, max_value=5)})
+        summary_display = summary_display.rename(columns={
+            "proposal_title": "Proposal Name", 
+            "total": "Score", 
+            "merge_target": "Combined With",
+            "display_comments": "Remarks"
+        })
+
+        # Sort and Drop helper
+        summary_display = summary_display.sort_values("sort_priority").drop(columns=["sort_priority"])
+
+        display_cols = ["Status", "Proposal Name", "Combined With", "Score", "Remarks"]
+        summary_display = summary_display[display_cols]
+
+        st.dataframe(
+            summary_display, 
+            use_container_width=True, 
+            hide_index=True, 
+            on_select="rerun", 
+            selection_mode="single-row", 
+            key="summary_table",
+            column_config={
+                "Status": st.column_config.TextColumn(width="small"),
+                "Combined With": st.column_config.TextColumn(width="medium"),
+                "Score": st.column_config.ProgressColumn(
+                    "Score",
+                    format="%.1f",
+                    min_value=0,
+                    max_value=5,
+                ),
+                "Remarks": st.column_config.TextColumn(width="large"),
+                "Proposal Name": st.column_config.TextColumn(width="medium"),
+            }
+        )
     else:
         st.info("No proposals evaluated yet.")
 
@@ -332,11 +314,19 @@ else:
             for p in remaining:
                 st.button(f"📝 Start: {p}", key=f"btn_{p}", use_container_width=True, on_click=nav_to_proposal, args=(p,))
 
-    # --- 14. FINALIZE ---
-    if len(remaining) == 0 and total_count > 0:
+    # --- 14. CONDITIONAL FINALIZE ---
+    all_done = (len(remaining) == 0 and total_count > 0)
+    if all_done:
         st.divider()
+        st.subheader("🏁 Finish Evaluation")
         if st.button("Finalize and Close Session", type="primary", use_container_width=True):
             with conn.session as s:
                 s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
                 s.commit()
+            st.success("Session Locked!")
+            time.sleep(2)
             st.rerun()
+    else:
+        st.divider()
+        st.info(f"💡 Complete the **{len(remaining)}** remaining proposal(s) to finalize.")
+

@@ -321,6 +321,9 @@ with st.sidebar:
             st.balloons()
             time.sleep(1)
             st.rerun()
+            st.divider()
+    st.page_link("admin.py", label="Home", icon="🏠")
+    st.page_link("pages/📊_reports.py", label="Detailed Reports", icon="📊")
 
 # --- 8. MAIN CONTENT AREA ---
 
@@ -504,6 +507,7 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 
 

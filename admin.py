@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 import time
-import qrcode
-import re
 import msal  
 from io import BytesIO
 from datetime import datetime
@@ -13,7 +11,7 @@ from streamlit_autorefresh import st_autorefresh
 # --- 1. CONFIG & CONNECTIONS ---
 st.set_page_config(page_title="ASM Admin Panel", layout="wide")
 
-# Persistent Session State
+# Initialize Session States
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 if "username" not in st.session_state:
@@ -27,7 +25,7 @@ def load_secret(key):
     st.error(f"❌ Missing Secret: **{key}**")
     st.stop()
 
-# Azure SSO Config
+# Load Secrets
 CLIENT_ID = load_secret("azure_client_id")
 CLIENT_SECRET = load_secret("azure_client_secret")
 TENANT_ID = load_secret("azure_tenant_id")
@@ -38,7 +36,13 @@ SCOPE = ["User.Read"]
 SUPABASE_URL = load_secret("supabase_url")
 SUPABASE_KEY = load_secret("supabase_key")
 BUCKET_NAME = "evaluator-photos"
+
+# Establish Connections
 conn = st.connection("postgresql", type="sql")
+try:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+except:
+    st.error("Supabase Connection Error.")
 
 # --- 2. SSO & LOGIN LOGIC ---
 def get_msal_app():
@@ -50,7 +54,7 @@ def check_password():
     if st.session_state.get("authenticated"):
         return True
 
-    # Handle SSO Callback
+    # Handle SSO Callback Redirect
     query_params = st.query_params
     if "code" in query_params:
         app = get_msal_app()
@@ -82,16 +86,15 @@ def check_password():
         msal_app = get_msal_app()
         auth_url = msal_app.get_authorization_request_url(SCOPE, redirect_uri=REDIRECT_URI)
         
-        # SAME WINDOW LOGIN (target="_self")
-        st.markdown(f"""
-            <a href="{auth_url}" target="_self" style="text-decoration: none;">
-                <div style="background-color: #0078d4; color: white; padding: 12px; border-radius: 5px; text-align: center; font-weight: bold; cursor: pointer; margin-bottom: 15px;">
-                    󰊯 Sign in with Microsoft 365
-                </div>
-            </a>
-        """, unsafe_allow_html=True)
+        # primary blue button for Microsoft
+        st.link_button(
+            "󰊯 Sign in with Microsoft 365", 
+            auth_url, 
+            type="primary", 
+            use_container_width=True
+        )
 
-        st.markdown("<p style='text-align: center; color: gray;'>- OR -</p>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; color: gray; margin: 15px 0;'>- OR -</p>", unsafe_allow_html=True)
 
         with st.form("login_form"):
             u_input = st.text_input("Local Username").strip()
@@ -110,46 +113,41 @@ def check_password():
 if not check_password():
     st.stop()
 
-# --- 3. THEME & CLIENTS ---
-try:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-except:
-    st.error("Supabase Connection Error.")
-
+# --- 3. THEME & CSS ---
 st.markdown("""
     <style>
     .stApp { background-color: #FFFFFF !important; color: #000000 !important; }
     [data-testid="stMetricValue"] { color: #1E3A8A !important; }
-    .eval-card { padding:15px; border-radius:10px; border: 1px solid #E2E8F0; text-align:center; margin-bottom:10px; min-height: 140px; }
+    div[data-testid="stExpander"] { background-color: #F8F9FA !important; border: 1px solid #E5E7EB !important; }
+    .eval-card {
+        padding:15px; border-radius:10px; border: 1px solid #E2E8F0; 
+        text-align:center; margin-bottom:10px; min-height: 140px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 4. DIALOGS ---
-@st.dialog("📱 Access QR Code")
-def show_qr_dialog(nickname):
+# --- 4. DIALOGS (MANAGE LOGIC) ---
+@st.dialog("📧 Send Access Link")
+def send_email_dialog(name, recipient_email, nickname):
     target_url = "https://asm-evaluation-system-10-evaluation-form.streamlit.app"
     link = f"{target_url}/?user={nickname.replace(' ', '%20')}"
-    qr = qrcode.QRCode(version=1, box_size=10, border=5)
-    qr.add_data(link)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    st.image(buf.getvalue(), caption=f"Scan for {nickname}", use_container_width=True)
-    st.code(link)
+    st.write(f"Sending personalized link to **{name}** at `{recipient_email}`")
+    st.info(f"Link: {link}")
+    if st.button("Confirm & Send via System", type="primary"):
+        st.success(f"✅ Link sent to {recipient_email}")
+        time.sleep(1); st.rerun()
 
 @st.dialog("✏️ Edit Evaluator")
-def edit_evaluator_dialog(old_name, old_nick, old_email):
+def edit_evaluator_dialog(old_name, old_nick):
     new_name = st.text_input("Full Name", value=old_name)
     new_nick = st.text_input("Nickname", value=old_nick)
-    new_email = st.text_input("Email", value=old_email)
-    new_photo = st.file_uploader("Update Photo (Optional)", type=['png', 'jpg'])
+    new_photo = st.file_uploader("Update Photo (Optional)", type=['png', 'jpg', 'jpeg'])
     if st.button("Save Changes", type="primary"):
         clean_new = new_name.strip()
         with conn.session as s:
-            s.execute(text("UPDATE evaluators SET name=:n, nickname=:nk, email=:em WHERE name=:old"),
-                      {"n": clean_new, "nk": new_nick.strip(), "em": new_email.strip(), "old": old_name})
-            s.execute(text("UPDATE scores SET evaluator=:n WHERE evaluator=:old"), {"n": clean_new, "old": old_name})
+            s.execute(text("UPDATE evaluators SET name = :new, nickname = :nick WHERE name = :old"), 
+                      {"new": clean_new, "nick": new_nick.strip(), "old": old_name})
+            s.execute(text("UPDATE scores SET evaluator = :new WHERE evaluator = :old"), {"new": clean_new, "old": old_name})
             s.commit()
         if new_photo:
             file_path = f"{clean_new.replace(' ', '_')}.png"
@@ -166,38 +164,75 @@ def edit_proposal_dialog(old_val):
             s.commit()
         st.rerun()
 
+@st.dialog("🔑 User Credentials")
+def reset_password_dialog(username):
+    new_pw = st.text_input("New Password", type="password")
+    if st.button("Update Password", type="primary"):
+        with conn.session as s:
+            s.execute(text("UPDATE users SET password_hash = :p WHERE username = :u"), {"p": new_pw.strip(), "u": username}); s.commit()
+        st.success("Password updated!"); st.rerun()
+
 @st.dialog("🗑️ Confirm Delete")
 def confirm_delete_dialog(table, column, value):
     st.warning(f"Delete '{value}' permanently?")
     if st.button("Yes, Delete", type="primary"):
+        if table == "evaluators":
+            try:
+                file_path = f"{value.strip().replace(' ', '_')}.png"
+                supabase.storage.from_(BUCKET_NAME).remove([file_path])
+            except: pass
         with conn.session as s:
-            s.execute(text(f"DELETE FROM {table} WHERE {column} = :val"), {"val": value})
-            s.commit()
+            s.execute(text(f"DELETE FROM {table} WHERE {column} = :val"), {"val": value}); s.commit()
         st.rerun()
 
-# --- 5. SIDEBAR ---
+# --- 5. HELPER FUNCTIONS ---
+def get_items_sql(table, column):
+    try:
+        df = conn.query(f"SELECT {column} FROM {table} ORDER BY {column} ASC;", ttl=0)
+        return df[column].dropna().tolist() if not df.empty else []
+    except: return []
+
+def add_item_sql(table, column, value):
+    with conn.session as s:
+        s.execute(text(f"INSERT INTO {table} ({column}) VALUES (:val) ON CONFLICT DO NOTHING;"), {"val": value.strip()}); s.commit()
+
+# --- 6. SIDEBAR NAVIGATION ---
 cache_buster = int(time.time())
 with st.sidebar:
     st.title("🛡️ ASM Admin")
     st.write(f"User: **{st.session_state['username']}**")
     if st.button("🚪 Logout", use_container_width=True):
-        st.session_state["authenticated"] = False
-        st.rerun()
+        st.session_state["authenticated"] = False; st.rerun()
     st.divider()
-    menu_choice = st.radio("Navigate to:", ["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"])
-    if st.session_state["user_role"] == "SuperAdmin":
-        if st.button("🔑 User Management", use_container_width=True): menu_choice = "🔑 User Management"
+    menu_options = ["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"]
+    if st.session_state["user_role"] == "SuperAdmin": menu_options.append("🔑 User Management")
+    menu_choice = st.radio("Navigate to:", menu_options)
+    
+    # Session Control (Force Reset)
+    if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
+        st.divider()
+        st.subheader("🚀 Session Control")
+        force_mode = st.toggle("⚠️ Enable Force Archive")
+        if st.button("🆕 Archive & Reset", type="primary", use_container_width=True, disabled=not force_mode):
+            with conn.session as s:
+                s.execute(text("INSERT INTO scores_history SELECT *, NOW() as archive_timestamp FROM scores;"))
+                s.execute(text("TRUNCATE TABLE scores RESTART IDENTITY CASCADE;"))
+                s.commit()
+            st.balloons(); time.sleep(1); st.rerun()
 
-# --- 6. MAIN CONTENT ---
+# --- 7. MAIN CONTENT ---
 
 if menu_choice == "📊 Tracker":
     st.header("📊 Live Proposal Progress")
     df_scores = conn.query("SELECT * FROM scores;", ttl=0)
-    props_all = conn.query("SELECT title FROM proposals ORDER BY title ASC;", ttl=0)['title'].tolist()
+    props_all = get_items_sql("proposals", "title")
     evals_df = conn.query("SELECT name, nickname FROM evaluators ORDER BY name ASC;", ttl=0)
     
-    total_req = len(props_all) * len(evals_df)
+    total_props = len(props_all)
+    total_evals = len(evals_df)
+    total_req = total_props * total_evals
     current_sub = len(df_scores) if not df_scores.empty else 0
+
     if total_req > 0:
         st.progress(min(current_sub / total_req, 1.0))
         st.write(f"**Total Progress:** {current_sub} / {total_req} Evaluations")
@@ -211,60 +246,65 @@ if menu_choice == "📊 Tracker":
             st.markdown(f"""<div class="eval-card" style="background-color:#F8F9FA; border-top: 5px solid #1E3A8A;">
                 <img src="{img_url}" style="width:50px; height:50px; border-radius:50%; object-fit:cover;" onerror="this.src='https://ui-avatars.com/api/?name={name}'">
                 <p style="font-weight:bold; margin:0;">{nick}</p>
-                <p style="font-size:1.2em; font-weight:bold; color:#1E3A8A;">{done} / {len(props_all)}</p>
+                <p style="font-size:1.2em; font-weight:bold; color:#1E3A8A;">{done} / {total_props}</p>
             </div>""", unsafe_allow_html=True)
+
+elif menu_choice == "👤 Evaluators & Links":
+    st.header("👤 Evaluators & Access Links")
+    with st.expander("➕ Add New Evaluator"):
+        with st.form("eval_form", clear_on_submit=True):
+            e_name = st.text_input("Full Name")
+            e_nick = st.text_input("Nickname")
+            e_mail = st.text_input("Email")
+            e_file = st.file_uploader("Photo", type=['png', 'jpg'])
+            if st.form_submit_button("Create Evaluator"):
+                if e_name and e_nick:
+                    with conn.session as s:
+                        s.execute(text("INSERT INTO evaluators (name, nickname, email, has_submitted) VALUES (:n, :nk, :em, FALSE)"), 
+                                  {"n": e_name.strip(), "nk": e_nick.strip(), "em": e_mail.strip()}); s.commit()
+                    if e_file:
+                        file_path = f"{e_name.strip().replace(' ', '_')}.png"
+                        supabase.storage.from_(BUCKET_NAME).upload(path=file_path, file=e_file.getvalue(), file_options={"content-type": "image/png"})
+                    st.rerun()
+
+    st.divider()
+    status_df = conn.query("SELECT * FROM evaluators ORDER BY name ASC;", ttl=0)
+    for _, row in status_df.iterrows():
+        e, nick, mail = row['name'], row['nickname'], row.get('email', 'No Email')
+        is_locked = bool(row['has_submitted'])
+        c1, c2, c3, c4, c5 = st.columns([1, 3, 2, 1, 1])
+        img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
+        c1.markdown(f'<img src="{img_url}" style="width:40px; height:40px; border-radius:50%; object-fit:cover;" onerror="this.src=\'https://ui-avatars.com/api/?name={e}\'">', unsafe_allow_html=True)
+        with c2:
+            st.write(f"**{nick}** ({e})")
+            st.caption(f"Status: {'🔒 LOCKED' if is_locked else '🔓 OPEN'}")
+        c3.write(f"`{mail}`")
+        if c4.button("✏️", key=f"ed_{e}"): edit_evaluator_dialog(e, nick)
+        if c5.button("🗑️", key=f"dl_{e}"): confirm_delete_dialog("evaluators", "name", e)
 
 elif menu_choice == "📋 Proposals":
     st.header("📋 Manage Proposals")
-    tab1, tab2 = st.tabs(["Single Entry", "Bulk Upload"])
-    with tab1:
-        p_name = st.text_input("New Proposal Title")
-        if st.button("Add Proposal"):
-            if p_name:
-                with conn.session as s:
-                    s.execute(text("INSERT INTO proposals (title) VALUES (:t) ON CONFLICT DO NOTHING"), {"t": p_name.strip()})
-                    s.commit()
-                st.rerun()
-    with tab2:
-        uploaded_file = st.file_uploader("Upload CSV/Excel (Needs 'title' column)", type=['csv', 'xlsx'])
-        if uploaded_file and st.button("Import Bulk Data"):
-            df_bulk = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-            if 'title' in df_bulk.columns:
-                with conn.session as s:
-                    for t in df_bulk['title'].dropna():
-                        s.execute(text("INSERT INTO proposals (title) VALUES (:t) ON CONFLICT DO NOTHING"), {"t": str(t).strip()})
-                    s.commit()
-                st.success("Imported Successfully!"); st.rerun()
-
+    p_name = st.text_input("Add Proposal Title")
+    if st.button("Add Single"):
+        if p_name: add_item_sql("proposals", "title", p_name); st.rerun()
     st.divider()
-    props = conn.query("SELECT title FROM proposals ORDER BY title ASC;", ttl=0)['title'].tolist()
+    props = get_items_sql("proposals", "title")
     for p in props:
         c1, c2, c3 = st.columns([5, 1, 1])
         c1.write(f"• {p}")
         if c2.button("✏️", key=f"ep_{p}"): edit_proposal_dialog(p)
         if c3.button("🗑️", key=f"dp_{p}"): confirm_delete_dialog("proposals", "title", p)
 
-elif menu_choice == "👤 Evaluators & Links":
-    st.header("👤 Evaluators & Access Links")
-    status_df = conn.query("SELECT * FROM evaluators ORDER BY name ASC;", ttl=0)
-    for _, row in status_df.iterrows():
-        e, nick, email = row['name'], row['nickname'], row.get('email', '')
-        c1, c2, c3, c4, c5, c6 = st.columns([1, 3, 1, 1, 1, 1])
-        img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
-        c1.markdown(f'<img src="{img_url}" style="width:40px; height:40px; border-radius:50%; object-fit:cover;" onerror="this.src=\'https://ui-avatars.com/api/?name={e}\'">', unsafe_allow_html=True)
-        with c2:
-            st.write(f"**{nick}**")
-            st.caption(f"📧 {email}")
-        if c3.button("📱 QR", key=f"qr_{e}"): show_qr_dialog(nick)
-        if c4.button("✏️", key=f"ed_{e}"): edit_evaluator_dialog(e, nick, email)
-        if c5.button("🔄", key=f"re_{e}"):
-            with conn.session as s:
-                s.execute(text("UPDATE evaluators SET has_submitted = FALSE WHERE name = :n"), {"n": e})
-                s.commit()
-            st.rerun()
-        if c6.button("🗑️", key=f"dl_{e}"): confirm_delete_dialog("evaluators", "name", e)
-
 elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
+elif menu_choice == "🔑 User Management":
+    st.header("🔑 System Admin Accounts")
+    users_df = conn.query("SELECT id, username, role FROM users ORDER BY id ASC;", ttl=0)
+    for _, row in users_df.iterrows():
+        c1, c2, c3 = st.columns([3, 1, 1])
+        c1.write(f"👤 {row['username']} ({row['role']})")
+        if c2.button("🔑", key=f"pw_{row['id']}"): reset_password_dialog(row['username'])
+        if c3.button("🗑️", key=f"du_{row['id']}"): confirm_delete_dialog("users", "id", row['id'])

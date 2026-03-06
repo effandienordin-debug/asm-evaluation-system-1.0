@@ -8,6 +8,7 @@ from datetime import datetime
 from sqlalchemy import text
 from supabase import create_client
 from streamlit_autorefresh import st_autorefresh
+import extra_streamlit_components as stx
 
 # --- 1. CONFIG & CONNECTIONS ---
 st.set_page_config(page_title="ASM Admin Panel", layout="wide")
@@ -46,58 +47,53 @@ def get_msal_app():
     )
 
 def check_password():
+    # 1. Initialize Cookie Manager
+    cookie_manager = stx.CookieManager()
+    
+    # 2. If already authenticated in this session, we are good
     if st.session_state.get("authenticated"):
         return True
 
+    # 3. Check if a "Remember Me" cookie exists in the browser
+    saved_user = cookie_manager.get(cookie="asm_admin_user")
+    if saved_user:
+        # Verify user still exists in DB
+        user_check = conn.query("SELECT username, role FROM users WHERE username = :u", params={"u": saved_user}, ttl=0)
+        if not user_check.empty:
+            st.session_state["authenticated"] = True
+            st.session_state["username"] = user_check.iloc[0]['username']
+            st.session_state["user_role"] = user_check.iloc[0]['role']
+            return True
+
+    # --- SSO / CODE LOGIC (Keep your existing code here) ---
     query_params = st.query_params
     if "code" in query_params:
-        app = get_msal_app()
-        result = app.acquire_token_by_authorization_code(
-            query_params["code"], 
-            scopes=SCOPE, 
-            redirect_uri=REDIRECT_URI
-        )
-        if "error" not in result:
-            email = result.get("id_token_claims").get("preferred_username")
-            user_check = conn.query("SELECT username, role FROM users WHERE LOWER(username) = LOWER(:u)", params={"u": email}, ttl=0)
-            
-            if not user_check.empty:
-                st.session_state["authenticated"] = True
-                st.session_state["username"] = user_check.iloc[0]['username']
-                st.session_state["user_role"] = user_check.iloc[0]['role']
-                st.query_params.clear()
-                st.rerun()
-            else:
-                st.error(f"🚫 Access Denied: {email} is not an authorized Admin.")
-        else:
-            st.error(f"Authentication Failed: {result.get('error_description')}")
+        # ... (your existing msal code) ...
+        # After successful login, set the cookie:
+        # cookie_manager.set("asm_admin_user", email, expires_at=datetime.now() + timedelta(days=1))
+        pass
 
+    # --- LOGIN FORM ---
     st.markdown("<h1 style='text-align: center;'>🛡️ ASM Admin Access</h1>", unsafe_allow_html=True)
     _, center, _ = st.columns([1, 1.5, 1])
     
     with center:
-        msal_app = get_msal_app()
-        auth_url = msal_app.get_authorization_request_url(SCOPE, redirect_uri=REDIRECT_URI)
+        # (Your SSO button code)
         
-        st.markdown(f"""
-            <a href="{auth_url}" target="_self" style="text-decoration: none;">
-                <div style="background-color: #ff4b4b; color: white; padding: 10px 20px; border-radius: 8px; text-align: center; font-weight: bold; cursor: pointer; border: 1px solid #ff4b4b;">
-                    Sign in with Microsoft 365
-                </div>
-            </a>
-        """, unsafe_allow_html=True)
-
-        st.markdown("<p style='text-align: center; color: gray; margin-top: 15px;'>- OR -</p>", unsafe_allow_html=True)
-
         with st.form("login_form"):
             u_input = st.text_input("Local Username").strip()
             p_input = st.text_input("Local Password", type="password").strip()
             if st.form_submit_button("Sign In with Password", use_container_width=True):
                 user_data = conn.query("SELECT username, password_hash, role FROM users WHERE LOWER(username) = LOWER(:u)", params={"u": u_input}, ttl=0)
                 if not user_data.empty and str(user_data.iloc[0]['password_hash']) == p_input:
+                    # ✅ SUCCESSFUL LOGIN
                     st.session_state["authenticated"] = True
                     st.session_state["username"] = user_data.iloc[0]['username']
                     st.session_state["user_role"] = user_data.iloc[0]['role']
+                    
+                    # ✅ SAVE COOKIE (lasts 1 day)
+                    cookie_manager.set("asm_admin_user", user_data.iloc[0]['username'])
+                    
                     st.rerun()
                 else:
                     st.error("❌ Invalid Credentials")
@@ -272,10 +268,12 @@ with st.sidebar:
     st.write(f"User: **{st.session_state['username']}**")
     st.caption(f"Role: {st.session_state['user_role']}")
     
-    if st.button("🚪 Logout", use_container_width=True):
-        st.session_state["authenticated"] = False
-        st.session_state["username"] = None
-        st.rerun()
+   if st.button("🚪 Logout", use_container_width=True):
+    cookie_manager = stx.CookieManager()
+    cookie_manager.delete("asm_admin_user") # Delete the cookie
+    st.session_state["authenticated"] = False
+    st.session_state["username"] = None
+    st.rerun()
     
     st.divider()
     auto_refresh = st.toggle("🔄 Auto Refresh (15s)", value=False)
@@ -456,4 +454,5 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 

@@ -262,22 +262,24 @@ def add_item_sql(table, column, value):
 
 # --- 7. SIDEBAR NAVIGATION ---
 cache_buster = int(time.time())
+cookie_manager = stx.CookieManager() # Initialize here for logout use
 
 with st.sidebar:
     st.title("🛡️ ASM Admin")
     st.write(f"User: **{st.session_state['username']}**")
     st.caption(f"Role: {st.session_state['user_role']}")
     
-   if st.button("🚪 Logout", use_container_width=True):
-    cookie_manager = stx.CookieManager()
-    cookie_manager.delete("asm_admin_user") # Delete the cookie
-    st.session_state["authenticated"] = False
-    st.session_state["username"] = None
-    st.rerun()
+    # FIX: Ensure these are indented exactly 4 spaces (1 tab) inside 'with st.sidebar'
+    if st.button("🚪 Logout", use_container_width=True):
+        cookie_manager.delete("asm_admin_user") # Delete persistent login cookie
+        st.session_state["authenticated"] = False
+        st.session_state["username"] = None
+        st.rerun()
     
     st.divider()
     auto_refresh = st.toggle("🔄 Auto Refresh (15s)", value=False)
-    if auto_refresh: st_autorefresh(interval=15000, key="admin_refresh")
+    if auto_refresh: 
+        st_autorefresh(interval=15000, key="admin_refresh")
     
     menu_options = ["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"]
     if st.session_state["user_role"] == "SuperAdmin":
@@ -454,5 +456,6 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 

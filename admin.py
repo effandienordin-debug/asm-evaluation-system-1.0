@@ -355,9 +355,8 @@ with st.sidebar:
 
             st.divider()
 
-    st.page_link("admin.py", label="Home", icon="🏠")
-
-    st.page_link("pages/📊_reports.py", label="Detailed Reports", icon="📊")
+   st.page_link("admin.py", label="Home", icon="🏠")
+   st.page_link("pages/📊_reports.py", label="Detailed Reports", icon="📊")
     st.divider()
     
     # 4. Logout (Placed at bottom for better UX)
@@ -549,6 +548,7 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 
 

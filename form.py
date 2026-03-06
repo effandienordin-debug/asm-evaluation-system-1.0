@@ -40,41 +40,47 @@ def check_password():
     if st.session_state.get("authenticated"):
         return True
 
-    # Handle SSO Callback
+    # --- HANDLE SSO CALLBACK ---
     query_params = st.query_params
     if "code" in query_params:
         app = get_msal_app()
         result = app.acquire_token_by_authorization_code(query_params["code"], scopes=SCOPE, redirect_uri=REDIRECT_URI)
         if "error" not in result:
+            sso_email = result.get("id_token_claims").get("preferred_username")
+            sso_name = result.get("id_token_claims").get("name")
+            
             st.session_state["authenticated"] = True
-            st.session_state["sso_user"] = {
-                "name": result.get("id_token_claims").get("name"),
-                "email": result.get("id_token_claims").get("preferred_username")
-            }
-            u_param = query_params.get("user")
+            st.session_state["sso_info"] = {"email": sso_email, "name": sso_name}
+            
+            # IDENTITY MAPPING: Update evaluator record with their SSO email
+            user_id = query_params.get("user")
+            if user_id:
+                with conn.session as s:
+                    s.execute(text("UPDATE evaluators SET sso_email = :sso WHERE nickname = :nick OR name = :nick"), 
+                             {"sso": sso_email, "nick": user_id})
+                    s.commit()
+            
             st.query_params.clear()
-            if u_param: st.query_params["user"] = u_param
+            if user_id: st.query_params["user"] = user_id
             st.rerun()
 
     # Login UI
-    st.markdown("<h2 style='text-align: center;'>🛡️ ASM Evaluator Portal</h2>", unsafe_allow_html=True)
+   st.markdown("<h1 style='text-align: center;'>🛡️ ASM Evaluator Access</h1>", unsafe_allow_html=True)
     _, center, _ = st.columns([1, 1.5, 1])
     with center:
-        # Microsoft SSO
         msal_app = get_msal_app()
         auth_url = msal_app.get_authorization_request_url(SCOPE, redirect_uri=REDIRECT_URI)
         st.link_button("󰊯 Sign in with Microsoft 365", auth_url, type="primary", use_container_width=True)
-        
-        st.markdown("<p style='text-align: center; color: gray; margin: 15px 0;'>- OR -</p>", unsafe_allow_html=True)
-        
-        # Local Password
+
+        st.markdown("<p style='text-align: center; color: gray; margin: 10px 0;'>- OR -</p>", unsafe_allow_html=True)
+
         with st.form("local_login"):
             p_input = st.text_input("Access Password", type="password")
             if st.form_submit_button("Enter with Password", use_container_width=True):
                 pass_df = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
                 if not pass_df.empty and p_input == pass_df.iloc[0]['value']:
                     st.session_state["authenticated"] = True
-                    st.session_state["sso_user"] = None
+                    st.session_state["sso_info"] = None
                     st.rerun()
                 else:
                     st.error("❌ Incorrect Password")
@@ -100,14 +106,26 @@ st.divider()
 
 # --- 9. HEADER ---
 cache_buster = int(datetime.now().timestamp())
-col_img, col_txt = st.columns([1, 4])
+col_img, col_txt, col_auth = st.columns([1, 2.5, 1.5])
+
 with col_img:
-    clean_name = current_user.replace(' ', '_')
-    img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{clean_name}.png?t={cache_buster}"
-    st.markdown(f'<div style="text-align: center;"><img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; border: 3px solid #1E3A8A;" onerror="this.src=\'https://ui-avatars.com/api/?name={current_user}\'"></div>', unsafe_allow_html=True)
+    # ... existing image logic ...
+
 with col_txt:
     st.title(f"Welcome, {current_user}")
     st.write("Official ASM Evaluation Portal")
+
+with col_auth:
+    sso = st.session_state.get("sso_info")
+    if sso:
+        st.success(f"Verified: {sso['name']}")
+        st.caption(f"MS: {sso['email']}")
+    else:
+        st.warning("Logged in via Password")
+    
+    if st.button("🚪 Logout", use_container_width=True):
+        st.session_state["authenticated"] = False
+        st.rerun()
 
 # --- 10. PROGRESS DATA FETCH ---
 try:
@@ -315,6 +333,7 @@ else:
     else:
         st.divider()
         st.info(f"💡 Complete the **{len(remaining)}** remaining proposal(s) to finalize.")
+
 
 
 

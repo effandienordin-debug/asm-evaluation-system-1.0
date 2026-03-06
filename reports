@@ -1,0 +1,83 @@
+import streamlit as st
+import pandas as pd
+import matplotlib.pyplot as plt
+from fpdf import FPDF
+import io
+from sqlalchemy import text
+
+# 1. Page Config
+st.set_page_config(page_title="ASM Reports", layout="wide")
+
+# 2. Safety Check: Redirect if not logged in
+if not st.session_state.get("authenticated"):
+    st.warning("Please login on the main Admin page first.")
+    st.stop()
+
+# 3. Access the database connection from the main script
+# (Assuming 'conn' is initialized in admin.py, we fetch fresh data here)
+conn = st.connection("postgresql", type="sql")
+
+st.title("📊 Strategic Reports & Exports")
+st.info("Export live evaluation data to PDF or CSV formats.")
+
+# --- FETCH DATA ---
+df_scores = conn.query("SELECT * FROM scores;", ttl=0)
+
+if df_scores.empty:
+    st.warning("No data available to generate reports.")
+    st.stop()
+
+# --- EXPORT INTERFACE ---
+col_csv, col_pdf = st.columns(2)
+
+with col_csv:
+    st.subheader("Raw Data")
+    csv_data = df_scores.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="📥 Download CSV",
+        data=csv_data,
+        file_name=f"asm_raw_data_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
+
+with col_pdf:
+    st.subheader("Official PDF")
+    
+    def generate_pdf(df):
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", "B", 16)
+        pdf.cell(0, 10, "ASM Evaluation System - Executive Report", ln=True, align='C')
+        
+        # Simple Bar Chart
+        fig, ax = plt.subplots(figsize=(8, 4))
+        # Grouping by proposal for the chart
+        chart_data = df.groupby('proposal_title').mean(numeric_only=True)
+        chart_data.plot(kind='bar', ax=ax, color='#1E3A8A')
+        plt.title("Average Scores per Proposal")
+        plt.tight_layout()
+
+        img_buf = io.BytesIO()
+        plt.savefig(img_buf, format='png')
+        img_buf.seek(0)
+        pdf.image(img_buf, x=10, y=30, w=190)
+        
+        # Table logic
+        pdf.ln(100)
+        pdf.set_font("Arial", "B", 10)
+        pdf.cell(80, 10, "Proposal", 1)
+        pdf.cell(60, 10, "Evaluator", 1)
+        pdf.cell(50, 10, "Avg Score", 1, ln=True)
+        
+        pdf.set_font("Arial", "", 10)
+        for _, row in df.iterrows():
+            pdf.cell(80, 10, str(row['proposal_title'])[:40], 1)
+            pdf.cell(60, 10, str(row['evaluator']), 1)
+            pdf.cell(50, 10, "See Details", 1, ln=True)
+            
+        return pdf.output(dest='S').encode('latin-1')
+
+    if st.button("📄 Generate PDF Report", use_container_width=True):
+        pdf_bytes = generate_pdf(df_scores)
+        st.download_button("💾 Save PDF", pdf_bytes, "ASM_Report.pdf", "application/pdf", use_container_width=True)

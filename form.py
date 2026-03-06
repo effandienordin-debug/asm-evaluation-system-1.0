@@ -19,16 +19,14 @@ CRITERIA = [
 
 st.set_page_config(page_title="ASM Evaluator Entry", layout="wide")
 
-# --- 2. DATABASE & SSO CONFIG ---
+# --- 2. CONNECTIONS & SECRETS ---
 conn = st.connection("postgresql", type="sql")
 
 def load_secret(key):
-    if key in st.secrets:
-        return st.secrets[key]
-    st.error(f"❌ Missing Secret: **{key}**")
-    st.stop()
+    if key in st.secrets: return st.secrets[key]
+    st.error(f"❌ Missing Secret: {key}"); st.stop()
 
-# Azure SSO Config from Secrets
+# Azure SSO Config
 CLIENT_ID = load_secret("azure_client_id")
 CLIENT_SECRET = load_secret("azure_client_secret")
 TENANT_ID = load_secret("azure_tenant_id")
@@ -36,49 +34,65 @@ REDIRECT_URI = load_secret("azure_redirect_uri")
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
 SCOPE = ["User.Read"]
 
-# --- 3. SSO LOGIN LOGIC ---
+# --- 3. DUAL LOGIN LOGIC (SSO & PASSWORD) ---
 def get_msal_app():
     return msal.ConfidentialClientApplication(
         CLIENT_ID, authority=AUTHORITY, client_credential=CLIENT_SECRET
     )
 
 def check_password():
-    # Check if already authenticated in session
     if st.session_state.get("authenticated"):
         return True
 
-    # Handle SSO Callback (Microsoft sending user back with a code)
+    # --- A. HANDLE SSO CALLBACK ---
     query_params = st.query_params
     if "code" in query_params:
         app = get_msal_app()
         result = app.acquire_token_by_authorization_code(
-            query_params["code"], 
-            scopes=SCOPE, 
-            redirect_uri=REDIRECT_URI
+            query_params["code"], scopes=SCOPE, redirect_uri=REDIRECT_URI
         )
         if "error" not in result:
-            # Capture SSO Info
             st.session_state["authenticated"] = True
-            st.session_state["sso_user_email"] = result.get("id_token_claims").get("preferred_username")
-            st.session_state["sso_user_name"] = result.get("id_token_claims").get("name")
-            
-            # Clean URL and keep existing 'user' param if present
-            current_user_id = query_params.get("user")
+            st.session_state["sso_info"] = {
+                "name": result.get("id_token_claims").get("name"),
+                "email": result.get("id_token_claims").get("preferred_username")
+            }
+            # Preserve the 'user' parameter while clearing the SSO code
+            u_param = query_params.get("user")
             st.query_params.clear()
-            if current_user_id:
-                st.query_params["user"] = current_user_id
+            if u_param: st.query_params["user"] = u_param
             st.rerun()
         else:
-            st.error(f"Authentication Failed: {result.get('error_description')}")
+            st.error(f"SSO Error: {result.get('error_description')}")
 
-    # Login UI
-    st.markdown("<h2 style='text-align: center;'>🔐 ASM Evaluator Portal</h2>", unsafe_allow_html=True)
+    # --- B. LOGIN UI ---
+    st.markdown("<h2 style='text-align: center;'>🛡️ ASM Evaluator Access</h2>", unsafe_allow_html=True)
     _, center, _ = st.columns([1, 1.5, 1])
+    
     with center:
-        st.info("Please sign in with your Microsoft 365 account to access this evaluation form.")
+        # 1. Microsoft SSO Button
         msal_app = get_msal_app()
         auth_url = msal_app.get_authorization_request_url(SCOPE, redirect_uri=REDIRECT_URI)
         st.link_button("󰊯 Sign in with Microsoft 365", auth_url, type="primary", use_container_width=True)
+
+        st.markdown("<p style='text-align: center; color: gray; margin: 15px 0;'>- OR -</p>", unsafe_allow_html=True)
+
+        # 2. Local Password Form
+        with st.form("local_login"):
+            p_input = st.text_input("Local Access Password", type="password")
+            if st.form_submit_button("Sign In with Password", use_container_width=True):
+                try:
+                    pass_df = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
+                    db_password = pass_df.iloc[0]['value'] if not pass_df.empty else None
+                    
+                    if p_input == db_password:
+                        st.session_state["authenticated"] = True
+                        st.session_state["sso_info"] = None # No SSO data for local login
+                        st.rerun()
+                    else:
+                        st.error("❌ Incorrect Password")
+                except Exception as e:
+                    st.error("Database connection error.")
     return False
 
 if not check_password():
@@ -101,8 +115,7 @@ def get_cloud_list(table, column):
     try:
         df = conn.query(f"SELECT {column} FROM {table} ORDER BY {column} ASC;", ttl=0)
         return df[column].tolist() if not df.empty else []
-    except:
-        return []
+    except: return []
 
 st_autorefresh(interval=30000, key="evaluator_heartbeat")
 EVALUATORS = get_cloud_list("evaluators", "name")
@@ -130,10 +143,8 @@ try:
     status_df = conn.query("SELECT has_submitted FROM evaluators WHERE name = :name LIMIT 1;", params={"name": current_user}, ttl=0)
     if not status_df.empty and status_df.iloc[0]['has_submitted']:
         st.warning(f"Hello {current_user}, your session is completed and locked.")
-        st.info("Please contact the Administrator if you need to revise your entries.")
         st.stop()
-except:
-    pass
+except: pass
 
 # --- 8. INITIALIZE STATE & PENDING REDIRECTS ---
 if "proposal_selector" not in st.session_state:
@@ -145,9 +156,9 @@ if st.session_state.get("pending_nav"):
     del st.session_state["pending_nav"]
     st.rerun()
 
-# --- 9. HEADER (Now with SSO Info) ---
+# --- 9. HEADER (Displays Profile + SSO Info if available) ---
 cache_buster = int(datetime.now().timestamp())
-col_img, col_txt, col_sso = st.columns([1, 2.5, 1.5])
+col_img, col_txt, col_auth = st.columns([1, 2.5, 1.5])
 
 with col_img:
     clean_name = current_user.replace(' ', '_')
@@ -158,15 +169,20 @@ with col_txt:
     st.title(f"Welcome, {current_user}")
     st.write("Official ASM Evaluation Portal")
 
-with col_sso:
-    st.markdown(f"""
-        <div style="background-color: #f0f2f6; padding: 10px; border-radius: 10px; border-left: 5px solid #1E3A8A;">
-            <p style="margin:0; font-size: 0.8em; color: gray;">Signed in as:</p>
-            <p style="margin:0; font-weight: bold;">{st.session_state.get('sso_user_name', 'N/A')}</p>
-            <p style="margin:0; font-size: 0.8em;">{st.session_state.get('sso_user_email', 'N/A')}</p>
-        </div>
-    """, unsafe_allow_html=True)
-    if st.button("Logout", icon="🚪", use_container_width=True):
+with col_auth:
+    sso = st.session_state.get("sso_info")
+    if sso:
+        st.markdown(f"""
+            <div style="background-color: #f0f2f6; padding: 10px; border-radius: 10px; border-left: 5px solid #1E3A8A;">
+                <p style="margin:0; font-size: 0.8em; color: gray;">MS 365 Verified:</p>
+                <p style="margin:0; font-weight: bold; font-size: 0.9em;">{sso['name']}</p>
+                <p style="margin:0; font-size: 0.75em;">{sso['email']}</p>
+            </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.info("Logged in via Local Access")
+    
+    if st.button("🚪 Logout", use_container_width=True):
         st.session_state["authenticated"] = False
         st.rerun()
 
@@ -389,5 +405,6 @@ else:
     else:
         st.divider()
         st.info(f"💡 Complete the **{len(remaining)}** remaining proposal(s) to finalize.")
+
 
 

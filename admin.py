@@ -79,133 +79,81 @@ BUCKET_NAME = "evaluator-photos"
 conn = st.connection("postgresql", type="sql")
 
 
-
 # --- 2. SSO & LOGIN LOGIC ---
-
 def get_msal_app():
-
     return msal.ConfidentialClientApplication(
-
         CLIENT_ID, authority=AUTHORITY, client_credential=CLIENT_SECRET
-
     )
 
-
-
 def check_password():
-
     if st.session_state.get("authenticated"):
-
         return True
 
-
-
     # --- HANDLE SSO CALLBACK ---
-
     query_params = st.query_params
-
     if "code" in query_params:
-
         app = get_msal_app()
-
         result = app.acquire_token_by_authorization_code(
-
             query_params["code"], 
-
             scopes=SCOPE, 
-
             redirect_uri=REDIRECT_URI
-
         )
-
         if "error" not in result:
-
             email = result.get("id_token_claims").get("preferred_username")
-
             user_check = conn.query("SELECT username, role FROM users WHERE LOWER(username) = LOWER(:u)", params={"u": email}, ttl=0)
-
             
-
             if not user_check.empty:
-
                 st.session_state["authenticated"] = True
-
                 st.session_state["username"] = user_check.iloc[0]['username']
-
                 st.session_state["user_role"] = user_check.iloc[0]['role']
-
                 st.query_params.clear()
-
                 st.rerun()
-
             else:
-
                 st.error(f"🚫 Access Denied: {email} is not an authorized Admin.")
-
         else:
-
             st.error(f"Authentication Failed: {result.get('error_description')}")
 
-
-
     # --- LOGIN UI ---
-
     st.markdown("<h1 style='text-align: center;'>🛡️ ASM Admin Access</h1>", unsafe_allow_html=True)
-
     _, center, _ = st.columns([1, 1.5, 1])
-
     
-
     with center:
-
         msal_app = get_msal_app()
-
         auth_url = msal_app.get_authorization_request_url(SCOPE, redirect_uri=REDIRECT_URI)
-
         
+        # CUSTOM HTML BUTTON TO OPEN IN SAME WINDOW
+        st.markdown(f"""
+            <a href="{auth_url}" target="_self" style="text-decoration: none;">
+                <div style="
+                    background-color: #ff4b4b; 
+                    color: white; 
+                    padding: 10px 20px; 
+                    border-radius: 8px; 
+                    text-align: center; 
+                    font-weight: bold; 
+                    cursor: pointer;
+                    border: 1px solid #ff4b4b;
+                    transition: background-color 0.3s;
+                " onmouseover="this.style.backgroundColor='#ff3333'" onmouseout="this.style.backgroundColor='#ff4b4b'">
+                    󰊯 Sign in with Microsoft 365
+                </div>
+            </a>
+        """, unsafe_allow_html=True)
 
-        st.link_button(
-
-            "󰊯 Sign in with Microsoft 365", 
-
-            auth_url, 
-
-            type="primary", 
-
-            use_container_width=True
-
-        )
-
-
-
-        st.markdown("<p style='text-align: center; color: gray; margin-top: 10px;'>- OR -</p>", unsafe_allow_html=True)
-
-
+        st.markdown("<p style='text-align: center; color: gray; margin-top: 15px;'>- OR -</p>", unsafe_allow_html=True)
 
         with st.form("login_form"):
-
             u_input = st.text_input("Local Username").strip()
-
             p_input = st.text_input("Local Password", type="password").strip()
-
             if st.form_submit_button("Sign In with Password", use_container_width=True):
-
                 user_data = conn.query("SELECT username, password_hash, role FROM users WHERE LOWER(username) = LOWER(:u)", params={"u": u_input}, ttl=0)
-
                 if not user_data.empty and str(user_data.iloc[0]['password_hash']) == p_input:
-
                     st.session_state["authenticated"] = True
-
                     st.session_state["username"] = user_data.iloc[0]['username']
-
                     st.session_state["user_role"] = user_data.iloc[0]['role']
-
                     st.rerun()
-
                 else:
-
                     st.error("❌ Invalid Credentials")
-
     return False
 
 
@@ -839,3 +787,4 @@ elif menu_choice == "📜 History":
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
 
     st.dataframe(df_hist, use_container_width=True)
+

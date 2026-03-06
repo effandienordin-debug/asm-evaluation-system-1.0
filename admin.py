@@ -119,6 +119,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 5. DIALOGS ---
+@st.dialog("📚 Bulk Add Proposals")
 def bulk_add_proposals_dialog():
     st.write("Paste your proposal titles below. Separate by **new lines** or **commas**.")
     raw_text = st.text_area("Proposals List", height=200, placeholder="Proposal A\nProposal B")
@@ -128,7 +129,7 @@ def bulk_add_proposals_dialog():
         items = re.split(r'[\n,]+', raw_text)
         cleaned_items = [i.strip() for i in items if i.strip()]
         
-        # 2. Validation: Check if the list is empty
+        # 2. Validation
         if not cleaned_items:
             st.error("🚨 The list cannot be blank! Please enter at least one proposal title.")
         else:
@@ -492,6 +493,7 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 
 

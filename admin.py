@@ -449,7 +449,8 @@ elif menu_choice == "👤 Evaluators & Links":
         pwd = row.get('password', '')
         is_locked = bool(row['has_submitted'])
         
-        c1, c2, c3, c4, c5, c6 = st.columns([0.5, 2.5, 1.5, 0.8, 0.8, 0.8])
+        # Adjusting column widths to fit the extra button (added a 7th column c7)
+        c1, c2, c3, c4, c5, c6, c7 = st.columns([0.5, 2.5, 1.5, 0.6, 0.6, 0.6, 0.6])
         
         img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
         c1.markdown(f'<img src="{img_url}" style="width:40px; height:40px; border-radius:50%; object-fit:cover;" onerror="this.src=\'https://ui-avatars.com/api/?name={e}\'">', unsafe_allow_html=True)
@@ -463,15 +464,24 @@ elif menu_choice == "👤 Evaluators & Links":
             st.write(f"`{pwd if pwd else 'None Set'}`")
 
         if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
-            if c4.button("✏️", key=f"edit_eval_btn_{e}"):
+            # Edit Button
+            if c4.button("✏️", key=f"edit_eval_btn_{e}", help="Edit Details"):
                 edit_evaluator_dialog(e, nick, pers_email, pwd)
-            if c5.button("📧", key=f"link_send_{e}"):
+            
+            # Email Link Button
+            if c5.button("📧", key=f"link_send_{e}", help="Send Link"):
                 send_email_dialog(e, pers_email, nick)
-            if c6.button("🔄", key=f"unlock_re_{e}"):
+            
+            # Unlock Button
+            if c6.button("🔄", key=f"unlock_re_{e}", help="Unlock Submission"):
                 with conn.session as s:
                     s.execute(text("UPDATE evaluators SET has_submitted = FALSE WHERE name = :n"), {"n": e})
                     s.commit()
                 st.rerun()
+            
+            # NEW: Delete Button 🗑️
+            if c7.button("🗑️", key=f"del_eval_{e}", help="Delete Evaluator"):
+                confirm_delete_dialog("evaluators", "name", e)
 
 elif menu_choice == "🔑 User Management":
     st.header("🔑 System Admin Accounts")
@@ -494,5 +504,6 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 

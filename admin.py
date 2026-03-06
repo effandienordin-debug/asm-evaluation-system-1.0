@@ -86,14 +86,13 @@ def check_password():
         msal_app = get_msal_app()
         auth_url = msal_app.get_authorization_request_url(SCOPE, redirect_uri=REDIRECT_URI)
         
-        # SAME-TAB REDIRECT FIX: Using target="_self"
-        st.markdown(f"""
-            <a href="{auth_url}" target="_self" style="text-decoration: none;">
-                <div style="background-color: #1E3A8A; color: white; padding: 12px; border-radius: 8px; text-align: center; font-weight: bold; cursor: pointer; border: 1px solid #1E3A8A;">
-                    󰊯 Sign in with Microsoft 365
-                </div>
-            </a>
-        """, unsafe_allow_html=True)
+        # primary blue button for Microsoft
+        st.link_button(
+            "󰊯 Sign in with Microsoft 365", 
+            auth_url, 
+            type="primary", 
+            use_container_width=True
+        )
 
         st.markdown("<p style='text-align: center; color: gray; margin: 15px 0;'>- OR -</p>", unsafe_allow_html=True)
 
@@ -127,29 +126,27 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 4. DIALOGS ---
+# --- 4. DIALOGS (MANAGE LOGIC) ---
 @st.dialog("📧 Send Access Link")
 def send_email_dialog(name, recipient_email, nickname):
     target_url = "https://asm-evaluation-system-10-evaluation-form.streamlit.app"
     link = f"{target_url}/?user={nickname.replace(' ', '%20')}"
     st.write(f"Sending personalized link to **{name}** at `{recipient_email}`")
     st.info(f"Link: {link}")
-    if st.button("Confirm & Send", type="primary"):
+    if st.button("Confirm & Send via System", type="primary"):
         st.success(f"✅ Link sent to {recipient_email}")
         time.sleep(1); st.rerun()
 
 @st.dialog("✏️ Edit Evaluator")
-def edit_evaluator_dialog(old_name, old_nick, old_email):
+def edit_evaluator_dialog(old_name, old_nick):
     new_name = st.text_input("Full Name", value=old_name)
     new_nick = st.text_input("Nickname", value=old_nick)
-    new_email = st.text_input("Email", value=old_email)
     new_photo = st.file_uploader("Update Photo (Optional)", type=['png', 'jpg', 'jpeg'])
     if st.button("Save Changes", type="primary"):
         clean_new = new_name.strip()
         with conn.session as s:
-            s.execute(text("UPDATE evaluators SET name = :new, nickname = :nick, email = :em WHERE name = :old"), 
-                      {"new": clean_new, "nick": new_nick.strip(), "em": new_email.strip(), "old": old_name})
-            # Cascade name changes to the scores table
+            s.execute(text("UPDATE evaluators SET name = :new, nickname = :nick WHERE name = :old"), 
+                      {"new": clean_new, "nick": new_nick.strip(), "old": old_name})
             s.execute(text("UPDATE scores SET evaluator = :new WHERE evaluator = :old"), {"new": clean_new, "old": old_name})
             s.commit()
         if new_photo:
@@ -167,13 +164,12 @@ def edit_proposal_dialog(old_val):
             s.commit()
         st.rerun()
 
-@st.dialog("🔑 Reset Local Password")
+@st.dialog("🔑 User Credentials")
 def reset_password_dialog(username):
     new_pw = st.text_input("New Password", type="password")
     if st.button("Update Password", type="primary"):
         with conn.session as s:
-            s.execute(text("UPDATE users SET password_hash = :p WHERE username = :u"), {"p": new_pw.strip(), "u": username})
-            s.commit()
+            s.execute(text("UPDATE users SET password_hash = :p WHERE username = :u"), {"p": new_pw.strip(), "u": username}); s.commit()
         st.success("Password updated!"); st.rerun()
 
 @st.dialog("🗑️ Confirm Delete")
@@ -186,8 +182,7 @@ def confirm_delete_dialog(table, column, value):
                 supabase.storage.from_(BUCKET_NAME).remove([file_path])
             except: pass
         with conn.session as s:
-            s.execute(text(f"DELETE FROM {table} WHERE {column} = :val"), {"val": value})
-            s.commit()
+            s.execute(text(f"DELETE FROM {table} WHERE {column} = :val"), {"val": value}); s.commit()
         st.rerun()
 
 # --- 5. HELPER FUNCTIONS ---
@@ -199,8 +194,7 @@ def get_items_sql(table, column):
 
 def add_item_sql(table, column, value):
     with conn.session as s:
-        s.execute(text(f"INSERT INTO {table} ({column}) VALUES (:val) ON CONFLICT DO NOTHING;"), {"val": value.strip()})
-        s.commit()
+        s.execute(text(f"INSERT INTO {table} ({column}) VALUES (:val) ON CONFLICT DO NOTHING;"), {"val": value.strip()}); s.commit()
 
 # --- 6. SIDEBAR NAVIGATION ---
 cache_buster = int(time.time())
@@ -213,8 +207,20 @@ with st.sidebar:
     menu_options = ["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"]
     if st.session_state["user_role"] == "SuperAdmin": menu_options.append("🔑 User Management")
     menu_choice = st.radio("Navigate to:", menu_options)
+    
+    # Session Control (Force Reset)
+    if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
+        st.divider()
+        st.subheader("🚀 Session Control")
+        force_mode = st.toggle("⚠️ Enable Force Archive")
+        if st.button("🆕 Archive & Reset", type="primary", use_container_width=True, disabled=not force_mode):
+            with conn.session as s:
+                s.execute(text("INSERT INTO scores_history SELECT *, NOW() as archive_timestamp FROM scores;"))
+                s.execute(text("TRUNCATE TABLE scores RESTART IDENTITY CASCADE;"))
+                s.commit()
+            st.balloons(); time.sleep(1); st.rerun()
 
-# --- 7. MAIN CONTENT AREA ---
+# --- 7. MAIN CONTENT ---
 
 if menu_choice == "📊 Tracker":
     st.header("📊 Live Proposal Progress")
@@ -265,12 +271,15 @@ elif menu_choice == "👤 Evaluators & Links":
     status_df = conn.query("SELECT * FROM evaluators ORDER BY name ASC;", ttl=0)
     for _, row in status_df.iterrows():
         e, nick, mail = row['name'], row['nickname'], row.get('email', 'No Email')
-        c1, c2, c3, c4, c5 = st.columns([1, 3, 1, 1, 1])
+        is_locked = bool(row['has_submitted'])
+        c1, c2, c3, c4, c5 = st.columns([1, 3, 2, 1, 1])
         img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
         c1.markdown(f'<img src="{img_url}" style="width:40px; height:40px; border-radius:50%; object-fit:cover;" onerror="this.src=\'https://ui-avatars.com/api/?name={e}\'">', unsafe_allow_html=True)
-        c2.write(f"**{nick}** ({e})\n\n`{mail}`")
-        if c3.button("✏️", key=f"ed_{e}"): edit_evaluator_dialog(e, nick, mail)
-        if c4.button("📧", key=f"ml_{e}"): send_email_dialog(e, mail, nick)
+        with c2:
+            st.write(f"**{nick}** ({e})")
+            st.caption(f"Status: {'🔒 LOCKED' if is_locked else '🔓 OPEN'}")
+        c3.write(f"`{mail}`")
+        if c4.button("✏️", key=f"ed_{e}"): edit_evaluator_dialog(e, nick)
         if c5.button("🗑️", key=f"dl_{e}"): confirm_delete_dialog("evaluators", "name", e)
 
 elif menu_choice == "📋 Proposals":

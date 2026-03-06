@@ -398,43 +398,40 @@ elif menu_choice == "📋 Proposals":
 elif menu_choice == "👤 Evaluators & Links":
     st.header("👤 Evaluators & Access Links")
     
+    # Line 401: The IF statement
     if st.session_state["user_role"] != "Viewer":
-    with st.expander("➕ Add New Evaluator"):
-        with st.form("eval_form", clear_on_submit=True):
-            col1, col2 = st.columns(2)
-            e_name = col1.text_input("Full Name*")
-            e_nick = col1.text_input("Nickname*")
-            e_mail = col2.text_input("Primary Email*")
-            e_pass = col2.text_input("Assign Password*")
-            e_file = st.file_uploader("Photo (Optional)", type=['png', 'jpg'])
-            
-            if st.form_submit_button("Create Evaluator", use_container_width=True):
-                # 1. Validation Check: Ensure required fields are not blank
-                if not e_name.strip() or not e_nick.strip() or not e_mail.strip() or not e_pass.strip():
-                    st.error("🚨 All fields marked with * are required. Please fill them in.")
-                else:
-                    # 2. Database Insert
-                    with conn.session as s:
-                        s.execute(text("""
-                            INSERT INTO evaluators (name, nickname, email, password, has_submitted) 
-                            VALUES (:n, :nk, :em, :pw, FALSE)
-                        """), 
-                        {"n": e_name.strip(), "nk": e_nick.strip(), "em": e_mail.strip(), "pw": e_pass.strip()})
-                        s.commit()
-                    
-                    # 3. Photo Handling: Only upload if a file was selected
-                    if e_file:
-                        file_path = f"{e_name.strip().replace(' ', '_')}.png"
-                        supabase.storage.from_(BUCKET_NAME).upload(
-                            path=file_path, 
-                            file=e_file.getvalue(), 
-                            file_options={"content-type": "image/png", "x-upsert": "true"}
-                        )
-                    
-                    st.success(f"✅ Evaluator '{e_name}' created successfully!")
-                    time.sleep(1)
-                    st.rerun()
-
+        # Line 402: This MUST be indented (4 spaces or 1 tab)
+        with st.expander("➕ Add New Evaluator"):
+            with st.form("eval_form", clear_on_submit=True):
+                col1, col2 = st.columns(2)
+                e_name = col1.text_input("Full Name*")
+                e_nick = col1.text_input("Nickname*")
+                e_mail = col2.text_input("Primary Email*")
+                e_pass = col2.text_input("Assign Password*")
+                e_file = st.file_uploader("Photo (Optional)", type=['png', 'jpg'])
+                
+                if st.form_submit_button("Create Evaluator", use_container_width=True):
+                    # Validation: Cannot be blank
+                    if not e_name.strip() or not e_nick.strip() or not e_mail.strip() or not e_pass.strip():
+                        st.error("🚨 All fields marked with * are required.")
+                    else:
+                        with conn.session as s:
+                            s.execute(text("""
+                                INSERT INTO evaluators (name, nickname, email, password, has_submitted) 
+                                VALUES (:n, :nk, :em, :pw, FALSE)
+                            """), {"n": e_name.strip(), "nk": e_nick.strip(), "em": e_mail.strip(), "pw": e_pass.strip()})
+                            s.commit()
+                        
+                        if e_file:
+                            file_path = f"{e_name.strip().replace(' ', '_')}.png"
+                            supabase.storage.from_(BUCKET_NAME).upload(
+                                path=file_path, 
+                                file=e_file.getvalue(), 
+                                file_options={"content-type": "image/png", "x-upsert": "true"}
+                            )
+                        st.success("Evaluator created!")
+                        time.sleep(1)
+                        st.rerun()
     st.divider()
     st.subheader("🔓 Access Control & Identity Mapping")
     status_df = conn.query("SELECT * FROM evaluators ORDER BY name ASC;", ttl=0)
@@ -491,6 +488,7 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 
 

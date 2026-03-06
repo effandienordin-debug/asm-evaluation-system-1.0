@@ -197,33 +197,46 @@ def send_email_dialog(name, recipient_email, nickname):
 
 @st.dialog("🔑 Add System User")
 def add_user_dialog():
-    new_un = st.text_input("New Username (or Email for SSO)")
-    new_pw = st.text_input("New Password", type="password")
+    new_un = st.text_input("New Username (or Email for SSO)").strip()
+    new_pw = st.text_input("New Password", type="password").strip()
     new_role = st.selectbox("Role", ["SuperAdmin", "Editor", "Viewer"])
+    
     if st.button("Create User", type="primary"):
-        with conn.session as s:
-            s.execute(text("INSERT INTO users (username, password_hash, role) VALUES (:u, :p, :r)"),
-                      {"u": new_un.strip(), "p": new_pw.strip(), "r": new_role})
-            s.commit()
-        st.success("User added!")
-        st.rerun()
+        # --- VALIDATION ---
+        if not new_un or not new_pw:
+            st.error("🚨 Both Username and Password are required!")
+        else:
+            with conn.session as s:
+                s.execute(text("INSERT INTO users (username, password_hash, role) VALUES (:u, :p, :r)"),
+                          {"u": new_un, "p": new_pw, "r": new_role})
+                s.commit()
+            st.success("✅ User added successfully!")
+            time.sleep(1)
+            st.rerun()
 
 @st.dialog("✏️ Edit System User")
 def edit_user_dialog(user_id, current_un, current_role):
-    new_un = st.text_input("Username", value=current_un)
-    new_pw = st.text_input("New Password (blank to keep current)", type="password")
+    new_un = st.text_input("Username", value=current_un).strip()
+    new_pw = st.text_input("New Password (blank to keep current)", type="password").strip()
     new_role = st.selectbox("Role", ["SuperAdmin", "Editor", "Viewer"], 
                             index=["SuperAdmin", "Editor", "Viewer"].index(current_role))
+    
     if st.button("Save Changes", type="primary"):
-        with conn.session as s:
-            if new_pw.strip():
-                s.execute(text("UPDATE users SET username = :u, password_hash = :p, role = :r WHERE id = :id"),
-                          {"u": new_un.strip(), "p": new_pw.strip(), "r": new_role, "id": user_id})
-            else:
-                s.execute(text("UPDATE users SET username = :u, role = :r WHERE id = :id"),
-                          {"u": new_un.strip(), "r": new_role, "id": user_id})
-            s.commit()
-        st.rerun()
+        # --- VALIDATION ---
+        if not new_un:
+            st.error("🚨 Username cannot be blank!")
+        else:
+            with conn.session as s:
+                if new_pw: # If password is provided, update it
+                    s.execute(text("UPDATE users SET username = :u, password_hash = :p, role = :r WHERE id = :id"),
+                              {"u": new_un, "p": new_pw, "r": new_role, "id": user_id})
+                else: # Otherwise, only update username and role
+                    s.execute(text("UPDATE users SET username = :u, role = :r WHERE id = :id"),
+                              {"u": new_un, "r": new_role, "id": user_id})
+                s.commit()
+            st.success("✅ User updated!")
+            time.sleep(1)
+            st.rerun()
 
 @st.dialog("🗑️ Delete System User")
 def delete_user_confirm(user_id, username):
@@ -481,4 +494,5 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 

@@ -682,49 +682,75 @@ elif menu_choice == "📋 Proposals":
 
 
 elif menu_choice == "👤 Evaluators & Links":
-
     st.header("👤 Evaluators & Access Links")
-
-    col_add, _ = st.columns([1, 1])
-
     
-
-    with col_add:
-
-        st.subheader("Add Evaluator")
-
-        if st.session_state["user_role"] != "Viewer":
-
+    # --- ADD EVALUATOR FORM ---
+    if st.session_state["user_role"] != "Viewer":
+        with st.expander("➕ Add New Evaluator"):
             with st.form("eval_form", clear_on_submit=True):
-
-                e_name = st.text_input("Full Name")
-
-                e_nick = st.text_input("Nickname")
-
-                e_mail = st.text_input("Primary Email (For Links)")
-
+                col1, col2 = st.columns(2)
+                e_name = col1.text_input("Full Name")
+                e_nick = col1.text_input("Nickname")
+                e_mail = col2.text_input("Primary Email")
+                e_pass = col2.text_input("Assign Password")
                 e_file = st.file_uploader("Photo", type=['png', 'jpg'])
-
-                if st.form_submit_button("Create"):
-
+                
+                if st.form_submit_button("Create Evaluator", use_container_width=True):
                     if e_name and e_nick:
-
                         with conn.session as s:
-
-                            s.execute(text("INSERT INTO evaluators (name, nickname, email, has_submitted) VALUES (:n, :nk, :em, FALSE)"), 
-
-                                     {"n": e_name.strip(), "nk": e_nick.strip(), "em": e_mail.strip()})
-
+                            s.execute(text("""
+                                INSERT INTO evaluators (name, nickname, email, password, has_submitted) 
+                                VALUES (:n, :nk, :em, :pw, FALSE)
+                            """), {"n": e_name.strip(), "nk": e_nick.strip(), "em": e_mail.strip(), "pw": e_pass.strip()})
                             s.commit()
-
                         if e_file:
-
                             file_path = f"{e_name.strip().replace(' ', '_')}.png"
-
                             supabase.storage.from_(BUCKET_NAME).upload(path=file_path, file=e_file.getvalue(), file_options={"content-type": "image/png"})
-
                         st.rerun()
 
+    st.divider()
+    st.subheader("🔓 Access Control & Identity Mapping")
+    
+    # Fetch all data including password
+    status_df = conn.query("SELECT * FROM evaluators ORDER BY name ASC;", ttl=0)
+    
+    for _, row in status_df.iterrows():
+        e = row['name']
+        nick = row['nickname']
+        pers_email = row.get('email', '')
+        pwd = row.get('password', '')
+        is_locked = bool(row['has_submitted'])
+        
+        # UI Row
+        c1, c2, c3, c4, c5, c6 = st.columns([0.5, 2.5, 1.5, 0.8, 0.8, 0.8])
+        
+        # Photo
+        img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
+        c1.markdown(f'<img src="{img_url}" style="width:40px; height:40px; border-radius:50%; object-fit:cover;" onerror="this.src=\'https://ui-avatars.com/api/?name={e}\'">', unsafe_allow_html=True)
+        
+        with c2:
+            st.write(f"**{nick}**")
+            st.caption(f"📧 {pers_email}")
+        
+        with c3:
+            st.caption("Access Password:")
+            st.write(f"`{pwd if pwd else 'None Set'}`")
+
+        if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
+            # EDIT Button
+            if c4.button("✏️", key=f"edit_eval_{e}", help="Edit Profile & Password"):
+                edit_evaluator_dialog(e, nick, pers_email, pwd)
+            
+            # LINK Button
+            if c5.button("📧", key=f"send_{e}", help="View Access Link"):
+                send_email_dialog(e, pers_email, nick)
+            
+            # UNLOCK/RESET Button
+            if c6.button("🔄", key=f"re_{e}", help="Unlock Session"):
+                with conn.session as s:
+                    s.execute(text("UPDATE evaluators SET has_submitted = FALSE WHERE name = :n"), {"n": e})
+                    s.commit()
+                st.rerun()
 
 
     st.divider()
@@ -826,6 +852,7 @@ elif menu_choice == "📜 History":
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
 
     st.dataframe(df_hist, use_container_width=True)
+
 
 
 

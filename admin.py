@@ -74,7 +74,7 @@ def check_password():
                 st.query_params.clear()
                 st.rerun()
             else:
-                st.error(f"🚫 Access Denied: {email} is not an authorized Admin.")
+                st.error(f"🚫 Access Denied: {email} is not authorized.")
         else:
             st.error(f"Authentication Failed: {result.get('error_description')}")
 
@@ -86,7 +86,7 @@ def check_password():
         msal_app = get_msal_app()
         auth_url = msal_app.get_authorization_request_url(SCOPE, redirect_uri=REDIRECT_URI)
         
-        # CUSTOM HTML BUTTON: Forces navigation in the SAME window/tab
+        # SAME-TAB REDIRECT FIX: Using target="_self"
         st.markdown(f"""
             <a href="{auth_url}" target="_self" style="text-decoration: none;">
                 <div style="background-color: #1E3A8A; color: white; padding: 12px; border-radius: 8px; text-align: center; font-weight: bold; cursor: pointer; border: 1px solid #1E3A8A;">
@@ -145,16 +145,26 @@ def edit_evaluator_dialog(old_name, old_nick, old_email):
     new_email = st.text_input("Email", value=old_email)
     new_photo = st.file_uploader("Update Photo (Optional)", type=['png', 'jpg', 'jpeg'])
     if st.button("Save Changes", type="primary"):
-        clean_new_name = new_name.strip()
+        clean_new = new_name.strip()
         with conn.session as s:
             s.execute(text("UPDATE evaluators SET name = :new, nickname = :nick, email = :em WHERE name = :old"), 
-                      {"new": clean_new_name, "nick": new_nick.strip(), "em": new_email.strip(), "old": old_name})
-            s.execute(text("UPDATE scores SET evaluator = :new WHERE evaluator = :old"), 
-                      {"new": clean_new_name, "old": old_name})
+                      {"new": clean_new, "nick": new_nick.strip(), "em": new_email.strip(), "old": old_name})
+            # Cascade name changes to the scores table
+            s.execute(text("UPDATE scores SET evaluator = :new WHERE evaluator = :old"), {"new": clean_new, "old": old_name})
             s.commit()
         if new_photo:
-            file_path = f"{clean_new_name.replace(' ', '_')}.png"
+            file_path = f"{clean_new.replace(' ', '_')}.png"
             supabase.storage.from_(BUCKET_NAME).upload(path=file_path, file=new_photo.getvalue(), file_options={"content-type": "image/png", "x-upsert": "true"})
+        st.rerun()
+
+@st.dialog("✏️ Edit Proposal")
+def edit_proposal_dialog(old_val):
+    new_val = st.text_input("Edit Proposal Title", value=old_val)
+    if st.button("Update Title", type="primary"):
+        with conn.session as s:
+            s.execute(text("UPDATE proposals SET title = :new WHERE title = :old"), {"new": new_val.strip(), "old": old_val})
+            s.execute(text("UPDATE scores SET proposal_title = :new WHERE proposal_title = :old"), {"new": new_val.strip(), "old": old_val})
+            s.commit()
         st.rerun()
 
 @st.dialog("🔑 Reset Local Password")
@@ -162,7 +172,8 @@ def reset_password_dialog(username):
     new_pw = st.text_input("New Password", type="password")
     if st.button("Update Password", type="primary"):
         with conn.session as s:
-            s.execute(text("UPDATE users SET password_hash = :p WHERE username = :u"), {"p": new_pw.strip(), "u": username}); s.commit()
+            s.execute(text("UPDATE users SET password_hash = :p WHERE username = :u"), {"p": new_pw.strip(), "u": username})
+            s.commit()
         st.success("Password updated!"); st.rerun()
 
 @st.dialog("🗑️ Confirm Delete")
@@ -175,7 +186,8 @@ def confirm_delete_dialog(table, column, value):
                 supabase.storage.from_(BUCKET_NAME).remove([file_path])
             except: pass
         with conn.session as s:
-            s.execute(text(f"DELETE FROM {table} WHERE {column} = :val"), {"val": value}); s.commit()
+            s.execute(text(f"DELETE FROM {table} WHERE {column} = :val"), {"val": value})
+            s.commit()
         st.rerun()
 
 # --- 5. HELPER FUNCTIONS ---
@@ -187,7 +199,8 @@ def get_items_sql(table, column):
 
 def add_item_sql(table, column, value):
     with conn.session as s:
-        s.execute(text(f"INSERT INTO {table} ({column}) VALUES (:val) ON CONFLICT DO NOTHING;"), {"val": value.strip()}); s.commit()
+        s.execute(text(f"INSERT INTO {table} ({column}) VALUES (:val) ON CONFLICT DO NOTHING;"), {"val": value.strip()})
+        s.commit()
 
 # --- 6. SIDEBAR NAVIGATION ---
 cache_buster = int(time.time())
@@ -242,7 +255,7 @@ elif menu_choice == "👤 Evaluators & Links":
                 if e_name and e_nick:
                     with conn.session as s:
                         s.execute(text("INSERT INTO evaluators (name, nickname, email, has_submitted) VALUES (:n, :nk, :em, FALSE)"), 
-                                 {"n": e_name.strip(), "nk": e_nick.strip(), "em": e_mail.strip()}); s.commit()
+                                  {"n": e_name.strip(), "nk": e_nick.strip(), "em": e_mail.strip()}); s.commit()
                     if e_file:
                         file_path = f"{e_name.strip().replace(' ', '_')}.png"
                         supabase.storage.from_(BUCKET_NAME).upload(path=file_path, file=e_file.getvalue(), file_options={"content-type": "image/png"})
@@ -265,6 +278,7 @@ elif menu_choice == "📋 Proposals":
     p_name = st.text_input("Add Proposal Title")
     if st.button("Add Single"):
         if p_name: add_item_sql("proposals", "title", p_name); st.rerun()
+    st.divider()
     props = get_items_sql("proposals", "title")
     for p in props:
         c1, c2, c3 = st.columns([5, 1, 1])

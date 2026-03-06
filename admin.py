@@ -264,16 +264,15 @@ def add_item_sql(table, column, value):
 cache_buster = int(time.time())
 cookie_manager = stx.CookieManager() # Initialize here for logout use
 
+# --- 7. SIDEBAR NAVIGATION ---
 with st.sidebar:
     st.title("🛡️ ASM Admin")
-    st.write(f"User: **{st.session_state['username']}**")
-    st.caption(f"Role: {st.session_state['user_role']}")
     
-    # FIX: Ensure these are indented exactly 4 spaces (1 tab) inside 'with st.sidebar'
+    # REMOVE this line: cookie_manager = stx.CookieManager()
+    
     if st.button("🚪 Logout", use_container_width=True):
-        cookie_manager.delete("asm_admin_user") # Delete persistent login cookie
+        cookie_manager.delete("asm_admin_user") # This now uses the global manager
         st.session_state["authenticated"] = False
-        st.session_state["username"] = None
         st.rerun()
     
     st.divider()
@@ -456,6 +455,7 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 
 

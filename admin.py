@@ -121,24 +121,26 @@ st.markdown("""
 # --- 5. DIALOGS ---
 @st.dialog("📚 Bulk Add Proposals")
 def bulk_add_proposals_dialog():
-    st.write("Paste your proposal titles below. You can separate them by **new lines** or **commas**.")
-    raw_text = st.text_area("Proposals List", height=200, placeholder="Proposal A\nProposal B\nProposal C")
+    st.write("Paste your proposal titles below. Separate by **new lines** or **commas**.")
+    raw_text = st.text_area("Proposals List", height=200, placeholder="Proposal A\nProposal B")
     
     if st.button("Add All Proposals", type="primary"):
-        if raw_text.strip():
-            # Split by newline or comma and remove empty spaces
-            items = re.split(r'[\n,]+', raw_text)
-            cleaned_items = [i.strip() for i in items if i.strip()]
-            
-            if cleaned_items:
-                with conn.session as s:
-                    for title in cleaned_items:
-                        s.execute(text("INSERT INTO proposals (title) VALUES (:val) ON CONFLICT DO NOTHING;"), 
-                                 {"val": title})
-                    s.commit()
-                st.success(f"✅ Successfully added {len(cleaned_items)} proposals!")
-                time.sleep(1)
-                st.rerun()
+        # 1. Split and Clean
+        items = re.split(r'[\n,]+', raw_text)
+        cleaned_items = [i.strip() for i in items if i.strip()]
+        
+        # 2. Validation: Check if the list is empty
+        if not cleaned_items:
+            st.error("🚨 The list cannot be blank! Please enter at least one proposal title.")
+        else:
+            with conn.session as s:
+                for title in cleaned_items:
+                    s.execute(text("INSERT INTO proposals (title) VALUES (:val) ON CONFLICT DO NOTHING;"), 
+                             {"val": title})
+                s.commit()
+            st.success(f"✅ Successfully added {len(cleaned_items)} proposals!")
+            time.sleep(1)
+            st.rerun()
             else:
                 st.error("No valid titles found.")
         else:
@@ -366,19 +368,22 @@ elif menu_choice == "📋 Proposals":
     st.header("📋 Manage Proposals")
     
     if st.session_state["user_role"] != "Viewer":
-        # Create two buttons for different add methods
         col_a, col_b = st.columns([1, 4])
         with col_a:
             if st.button("📚 Bulk Add"):
                 bulk_add_proposals_dialog()
         
-        # Keep the single add form
         with st.expander("➕ Add Single Proposal"):
             with st.form("add_proposal_form", clear_on_submit=True):
-                p_name = st.text_input("Proposal Title")
+                p_name = st.text_input("Proposal Title*") # Added asterisk
                 if st.form_submit_button("Add Single"):
-                    if p_name: 
-                        add_item_sql("proposals", "title", p_name)
+                    # 3. Validation: Check if the single title is blank
+                    if not p_name.strip():
+                        st.error("🚨 Proposal title cannot be blank!")
+                    else:
+                        add_item_sql("proposals", "title", p_name.strip())
+                        st.success("✅ Proposal added!")
+                        time.sleep(1)
                         st.rerun()
     
     st.divider()
@@ -488,6 +493,7 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 
 

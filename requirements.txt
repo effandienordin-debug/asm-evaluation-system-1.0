@@ -8,5 +8,6 @@ streamlit-autorefresh
 qrcode[pil]
 matplotlib
 msal
+extra-streamlit-components
 
 

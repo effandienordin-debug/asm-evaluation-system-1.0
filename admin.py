@@ -393,39 +393,42 @@ def edit_proposal_dialog(old_val):
 
 
 @st.dialog("✏️ Edit Evaluator")
-
-def edit_evaluator_dialog(old_name, old_nick):
-
+def edit_evaluator_dialog(old_name, old_nick, old_email, old_pwd):
     new_name = st.text_input("Full Name", value=old_name)
-
     new_nick = st.text_input("Nickname", value=old_nick)
-
+    new_email = st.text_input("Email", value=old_email)
+    new_pwd = st.text_input("Access Password", value=old_pwd, help="Password for the evaluator to log into their form")
     new_photo = st.file_uploader("Update Photo (Optional)", type=['png', 'jpg', 'jpeg'])
-
+    
     if st.button("Save Changes", type="primary"):
-
-        clean_new_name = new_name.strip()
-
+        clean_name = new_name.strip()
         with conn.session as s:
-
-            s.execute(text("UPDATE evaluators SET name = :new, nickname = :nick WHERE name = :old"), 
-
-                      {"new": clean_new_name, "nick": new_nick.strip(), "old": old_name})
-
+            s.execute(text("""
+                UPDATE evaluators 
+                SET name = :new, nickname = :nick, email = :em, password = :pw 
+                WHERE name = :old
+            """), {
+                "new": clean_name, 
+                "nick": new_nick.strip(), 
+                "em": new_email.strip(),
+                "pw": new_pwd.strip(),
+                "old": old_name
+            })
+            # Also update scores table to maintain relation if name changed
             s.execute(text("UPDATE scores SET evaluator = :new WHERE evaluator = :old"), 
-
-                      {"new": clean_new_name, "old": old_name})
-
+                      {"new": clean_name, "old": old_name})
             s.commit()
-
+        
         if new_photo:
-
-            file_path = f"{clean_new_name.replace(' ', '_')}.png"
-
-            supabase.storage.from_(BUCKET_NAME).upload(path=file_path, file=new_photo.getvalue(), file_options={"content-type": "image/png", "x-upsert": "true"})
-
+            file_path = f"{clean_name.replace(' ', '_')}.png"
+            supabase.storage.from_(BUCKET_NAME).upload(
+                path=file_path, 
+                file=new_photo.getvalue(), 
+                file_options={"content-type": "image/png", "x-upsert": "true"}
+            )
+        st.success("Evaluator updated!")
+        time.sleep(1)
         st.rerun()
-
 
 
 @st.dialog("🗑️ Confirm Delete")
@@ -823,5 +826,6 @@ elif menu_choice == "📜 History":
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
 
     st.dataframe(df_hist, use_container_width=True)
+
 
 

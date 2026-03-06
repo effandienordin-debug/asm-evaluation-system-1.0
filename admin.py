@@ -146,26 +146,46 @@ def bulk_add_proposals_dialog():
             
 @st.dialog("✏️ Edit Evaluator")
 def edit_evaluator_dialog(old_name, old_nick, old_email, old_pwd):
-    new_name = st.text_input("Full Name", value=old_name)
-    new_nick = st.text_input("Nickname", value=old_nick)
-    new_email = st.text_input("Email", value=old_email)
-    new_pwd = st.text_input("Access Password", value=old_pwd)
+    # Use .get() or provide defaults to ensure these are never None
+    new_name = st.text_input("Full Name", value=str(old_name or ""))
+    new_nick = st.text_input("Nickname", value=str(old_nick or ""))
+    new_email = st.text_input("Email", value=str(old_email or ""))
+    new_pwd = st.text_input("Access Password", value=str(old_pwd or ""))
     new_photo = st.file_uploader("Update Photo (Optional)", type=['png', 'jpg', 'jpeg'])
     
     if st.button("Save Changes", type="primary"):
-        clean_name = new_name.strip()
+        # ✅ Safety: Ensure we have strings before stripping
+        clean_name = new_name.strip() if new_name else ""
+        clean_nick = new_nick.strip() if new_nick else ""
+        clean_email = new_email.strip() if new_email else ""
+        clean_pwd = new_pwd.strip() if new_pwd else ""
+        
+        if not clean_name:
+            st.error("Name cannot be empty!")
+            return
+
         with conn.session as s:
             s.execute(text("""
                 UPDATE evaluators 
                 SET name = :new, nickname = :nick, email = :em, password = :pw 
                 WHERE name = :old
-            """), {"new": clean_name, "nick": new_nick.strip(), "em": new_email.strip(), "pw": new_pwd.strip(), "old": old_name})
+            """), {
+                "new": clean_name, 
+                "nick": clean_nick, 
+                "em": clean_email, 
+                "pw": clean_pwd, 
+                "old": old_name
+            })
             s.execute(text("UPDATE scores SET evaluator = :new WHERE evaluator = :old"), {"new": clean_name, "old": old_name})
             s.commit()
         
         if new_photo:
             file_path = f"{clean_name.replace(' ', '_')}.png"
-            supabase.storage.from_(BUCKET_NAME).upload(path=file_path, file=new_photo.getvalue(), file_options={"content-type": "image/png", "x-upsert": "true"})
+            supabase.storage.from_(BUCKET_NAME).upload(
+                path=file_path, 
+                file=new_photo.getvalue(), 
+                file_options={"content-type": "image/png", "x-upsert": "true"}
+            )
         
         st.success("Evaluator updated!")
         time.sleep(1)
@@ -455,6 +475,7 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 
 

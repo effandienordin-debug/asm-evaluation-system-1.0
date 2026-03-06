@@ -10,6 +10,8 @@ from supabase import create_client
 from streamlit_autorefresh import st_autorefresh
 import extra_streamlit_components as stx
 
+cookie_manager = stx.CookieManager(key="main_cookie_manager")
+
 # --- 1. CONFIG & CONNECTIONS ---
 st.set_page_config(page_title="ASM Admin Panel", layout="wide")
 
@@ -47,14 +49,12 @@ def get_msal_app():
     )
 
 def check_password():
-    # 1. Initialize Cookie Manager
-    cookie_manager = stx.CookieManager()
+    # REMOVE this line: cookie_manager = stx.CookieManager()
     
-    # 2. If already authenticated in this session, we are good
     if st.session_state.get("authenticated"):
         return True
 
-    # 3. Check if a "Remember Me" cookie exists in the browser
+    # Use the globally defined cookie_manager
     saved_user = cookie_manager.get(cookie="asm_admin_user")
     if saved_user:
         # Verify user still exists in DB
@@ -456,6 +456,7 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 
 

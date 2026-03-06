@@ -123,7 +123,31 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 5. DIALOGS ---
-
+@st.dialog("📚 Bulk Add Proposals")
+def bulk_add_proposals_dialog():
+    st.write("Paste your proposal titles below. You can separate them by **new lines** or **commas**.")
+    raw_text = st.text_area("Proposals List", height=200, placeholder="Proposal A\nProposal B\nProposal C")
+    
+    if st.button("Add All Proposals", type="primary"):
+        if raw_text.strip():
+            # Split by newline or comma and remove empty spaces
+            items = re.split(r'[\n,]+', raw_text)
+            cleaned_items = [i.strip() for i in items if i.strip()]
+            
+            if cleaned_items:
+                with conn.session as s:
+                    for title in cleaned_items:
+                        s.execute(text("INSERT INTO proposals (title) VALUES (:val) ON CONFLICT DO NOTHING;"), 
+                                 {"val": title})
+                    s.commit()
+                st.success(f"✅ Successfully added {len(cleaned_items)} proposals!")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error("No valid titles found.")
+        else:
+            st.error("Please enter some text.")
+            
 @st.dialog("✏️ Edit Evaluator")
 def edit_evaluator_dialog(old_name, old_nick, old_email, old_pwd):
     new_name = st.text_input("Full Name", value=old_name)
@@ -321,21 +345,36 @@ if menu_choice == "📊 Tracker":
 
 elif menu_choice == "📋 Proposals":
     st.header("📋 Manage Proposals")
-    if st.session_state["user_role"] != "Viewer":
-        with st.form("add_proposal_form"):
-            p_name = st.text_input("Add Proposal Title")
-            if st.form_submit_button("Add Single"):
-                if p_name: 
-                    add_item_sql("proposals", "title", p_name)
-                    st.rerun()
     
+    if st.session_state["user_role"] != "Viewer":
+        # Create two buttons for different add methods
+        col_a, col_b = st.columns([1, 4])
+        with col_a:
+            if st.button("📚 Bulk Add"):
+                bulk_add_proposals_dialog()
+        
+        # Keep the single add form
+        with st.expander("➕ Add Single Proposal"):
+            with st.form("add_proposal_form", clear_on_submit=True):
+                p_name = st.text_input("Proposal Title")
+                if st.form_submit_button("Add Single"):
+                    if p_name: 
+                        add_item_sql("proposals", "title", p_name)
+                        st.rerun()
+    
+    st.divider()
+    
+    # List and Manage Proposals
     props = get_items_sql("proposals", "title")
-    for p in props:
-        c1, c2, c3 = st.columns([5, 1, 1])
-        c1.write(f"• {p}")
-        if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
-            if c2.button("✏️", key=f"edit_p_{p}"): edit_proposal_dialog(p)
-            if c3.button("🗑️", key=f"del_p_{p}"): confirm_delete_dialog("proposals", "title", p)
+    if not props:
+        st.info("No proposals found. Use the buttons above to add some.")
+    else:
+        for p in props:
+            c1, c2, c3 = st.columns([5, 1, 1])
+            c1.write(f"• {p}")
+            if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
+                if c2.button("✏️", key=f"edit_p_{p}"): edit_proposal_dialog(p)
+                if c3.button("🗑️", key=f"del_p_{p}"): confirm_delete_dialog("proposals", "title", p)
 
 elif menu_choice == "👤 Evaluators & Links":
     st.header("👤 Evaluators & Access Links")
@@ -417,3 +456,4 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+

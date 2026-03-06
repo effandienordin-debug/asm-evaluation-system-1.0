@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import time
-import qrcode
 import re
 import msal  
 from io import BytesIO
@@ -51,7 +50,6 @@ def check_password():
         return True
 
     # --- HANDLE SSO CALLBACK ---
-    # This must run BEFORE the UI stop to catch the redirect from Microsoft
     query_params = st.query_params
     if "code" in query_params:
         app = get_msal_app()
@@ -62,7 +60,6 @@ def check_password():
         )
         if "error" not in result:
             email = result.get("id_token_claims").get("preferred_username")
-            # Check if user exists in your DB
             user_check = conn.query("SELECT username, role FROM users WHERE LOWER(username) = LOWER(:u)", params={"u": email}, ttl=0)
             
             if not user_check.empty:
@@ -77,12 +74,10 @@ def check_password():
             st.error(f"Authentication Failed: {result.get('error_description')}")
 
     # --- LOGIN UI ---
-   # --- LOGIN UI ---
     st.markdown("<h1 style='text-align: center;'>🛡️ ASM Admin Access</h1>", unsafe_allow_html=True)
     _, center, _ = st.columns([1, 1.5, 1])
     
     with center:
-        # REPLACE THE OLD HTML BLOCK WITH THIS:
         msal_app = get_msal_app()
         auth_url = msal_app.get_authorization_request_url(SCOPE, redirect_uri=REDIRECT_URI)
         
@@ -99,7 +94,6 @@ def check_password():
             u_input = st.text_input("Local Username").strip()
             p_input = st.text_input("Local Password", type="password").strip()
             if st.form_submit_button("Sign In with Password", use_container_width=True):
-                # Verify local user
                 user_data = conn.query("SELECT username, password_hash, role FROM users WHERE LOWER(username) = LOWER(:u)", params={"u": u_input}, ttl=0)
                 if not user_data.empty and str(user_data.iloc[0]['password_hash']) == p_input:
                     st.session_state["authenticated"] = True
@@ -114,14 +108,11 @@ def check_password():
 if not check_password():
     st.stop()
 
-# --- 3. THE REST OF YOUR APP (INITIALIZE CLIENTS ETC) ---
+# --- 3. INITIALIZE CLIENTS ---
 try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-except:
-    st.error("Supabase Connection Error.")
-
-if not check_password():
-    st.stop() 
+except Exception as e:
+    st.error(f"Supabase Connection Error: {e}")
 
 # --- 4. THEME & CSS ---
 st.markdown("""
@@ -140,15 +131,11 @@ st.markdown("""
 @st.dialog("📧 Send Access Link")
 def send_email_dialog(name, recipient_email, nickname):
     target_url = "https://asm-evaluation-system-10-evaluation-form.streamlit.app"
-    # Use nickname as the identifier per your existing logic
     link = f"{target_url}/?user={nickname.replace(' ', '%20')}"
-    
     st.write(f"Sending personalized link to **{name}** at `{recipient_email}`")
     st.info(f"Link: {link}")
-    
     if st.button("Confirm & Send via System", type="primary"):
-        # Integration point for Email API (Resend/SendGrid)
-        # For now, we simulate success
+        # Placeholder for Email API
         st.success(f"✅ Link sent to {recipient_email}")
         time.sleep(1)
         st.rerun()
@@ -344,9 +331,12 @@ if menu_choice == "📊 Tracker":
 elif menu_choice == "📋 Proposals":
     st.header("📋 Manage Proposals")
     if st.session_state["user_role"] != "Viewer":
-        p_name = st.text_input("Add Proposal Title")
-        if st.button("Add Single"):
-            if p_name: add_item_sql("proposals", "title", p_name); st.rerun()
+        with st.form("add_proposal_form"):
+            p_name = st.text_input("Add Proposal Title")
+            if st.form_submit_button("Add Single"):
+                if p_name: 
+                    add_item_sql("proposals", "title", p_name)
+                    st.rerun()
     
     props = get_items_sql("proposals", "title")
     for p in props:
@@ -358,7 +348,7 @@ elif menu_choice == "📋 Proposals":
 
 elif menu_choice == "👤 Evaluators & Links":
     st.header("👤 Evaluators & Access Links")
-    col_add, col_links = st.columns([1, 1])
+    col_add, _ = st.columns([1, 1])
     
     with col_add:
         st.subheader("Add Evaluator")
@@ -374,10 +364,11 @@ elif menu_choice == "👤 Evaluators & Links":
                             s.execute(text("INSERT INTO evaluators (name, nickname, email, has_submitted) VALUES (:n, :nk, :em, FALSE)"), 
                                      {"n": e_name.strip(), "nk": e_nick.strip(), "em": e_mail.strip()})
                             s.commit()
-                        # ... photo upload logic ...
+                        if e_file:
+                            file_path = f"{e_name.strip().replace(' ', '_')}.png"
+                            supabase.storage.from_(BUCKET_NAME).upload(path=file_path, file=e_file.getvalue(), file_options={"content-type": "image/png"})
                         st.rerun()
 
-    # Access Control List (Integrated with Email and SSO display)
     st.divider()
     st.subheader("🔓 Access Control & Identity Mapping")
     status_df = conn.query("SELECT * FROM evaluators ORDER BY name ASC;", ttl=0)
@@ -389,12 +380,11 @@ elif menu_choice == "👤 Evaluators & Links":
         
         c1, c2, c3, c4, c5 = st.columns([1, 3, 2, 1, 1])
         img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
-        c1.markdown(f'<img src="{img_url}" style="width:40px; height:40px; border-radius:50%;" onerror="this.src=\'https://ui-avatars.com/api/?name={e}\'">', unsafe_allow_html=True)
+        c1.markdown(f'<img src="{img_url}" style="width:40px; height:40px; border-radius:50%; object-fit:cover;" onerror="this.src=\'https://ui-avatars.com/api/?name={e}\'">', unsafe_allow_html=True)
         
         with c2:
             st.write(f"**{nick}**")
             st.caption(f"📧 {pers_email} | {'🔒 LOCKED' if is_locked else '🔓 OPEN'}")
-        
         with c3:
             st.caption("Linked MS Account:")
             st.write(f"`{sso_linked}`")
@@ -420,8 +410,8 @@ elif menu_choice == "🔑 User Management":
             st.write(f"👤 {row['username']}")
             st.caption(f"MS Auth: {row['sso_email'] or 'None'}")
         c2.write(f"**{row['role']}**")
-        if c3.button("🔑", key=f"pw_u_{row['id']}"):
-            reset_password_dialog(row['username'])
+        if c3.button("✏️", key=f"edit_u_{row['id']}"):
+            edit_user_dialog(row['id'], row['username'], row['role'])
         if c4.button("🗑️", key=f"del_u_{row['id']}"):
             delete_user_confirm(row['id'], row['username'])
 

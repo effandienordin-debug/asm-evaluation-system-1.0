@@ -77,22 +77,23 @@ def check_password():
             st.error(f"Authentication Failed: {result.get('error_description')}")
 
     # --- LOGIN UI ---
+   # --- LOGIN UI ---
     st.markdown("<h1 style='text-align: center;'>🛡️ ASM Admin Access</h1>", unsafe_allow_html=True)
     _, center, _ = st.columns([1, 1.5, 1])
     
     with center:
-        # Microsoft SSO Button with the "target='_top'" fix
+        # REPLACE THE OLD HTML BLOCK WITH THIS:
         msal_app = get_msal_app()
         auth_url = msal_app.get_authorization_request_url(SCOPE, redirect_uri=REDIRECT_URI)
-        st.markdown(f"""
-            <a href="{auth_url}" target="_top" style="text-decoration: none;">
-                <div style="background-color: #2F2F2F; color: white; padding: 12px; border-radius: 5px; text-align: center; font-weight: bold; margin-bottom: 20px; border: 1px solid #444; cursor: pointer;">
-                    Sign in with Microsoft 365
-                </div>
-            </a>
-        """, unsafe_allow_html=True)
+        
+        st.link_button(
+            "󰊯 Sign in with Microsoft 365", 
+            auth_url, 
+            type="primary", 
+            use_container_width=True
+        )
 
-        st.markdown("<p style='text-align: center; color: gray;'>- OR -</p>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; color: gray; margin-top: 10px;'>- OR -</p>", unsafe_allow_html=True)
 
         with st.form("login_form"):
             u_input = st.text_input("Local Username").strip()
@@ -398,4 +399,5 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 

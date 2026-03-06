@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import time
 import re
+import msal
 from datetime import datetime
 from sqlalchemy import text
 from streamlit_autorefresh import st_autorefresh
@@ -16,37 +17,69 @@ CRITERIA = [
     ('Timeline Readiness', 0.10), ('Execution Strategy', 0.15)
 ]
 
-# Set to wide to accommodate the new "Combined With" column
 st.set_page_config(page_title="ASM Evaluator Entry", layout="wide")
 
-# --- 2. DATABASE CONNECTION ---
+# --- 2. DATABASE & SSO CONFIG ---
 conn = st.connection("postgresql", type="sql")
 
-# --- 3. LOGIN LOGIC ---
-def check_password():
-    def password_entered():
-        # Fetch fresh password from DB
-        try:
-            pass_df = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
-            db_password = pass_df.iloc[0]['value'] if not pass_df.empty else None
-        except:
-            db_password = None
-        
-        if st.session_state["password_input"] == db_password:
-            st.session_state["password_correct"] = True
-        else:
-            st.session_state["password_correct"] = False
+def load_secret(key):
+    if key in st.secrets:
+        return st.secrets[key]
+    st.error(f"❌ Missing Secret: **{key}**")
+    st.stop()
 
-    if "password_correct" not in st.session_state:
-        st.title("🔐 ASM Evaluator Login")
-        st.text_input("Enter Access Password", type="password", on_change=password_entered, key="password_input")
-        return False
-    elif not st.session_state["password_correct"]:
-        st.title("🔐 ASM Secure Access")
-        st.text_input("Please enter the access password", type="password", on_change=password_entered, key="password_input")
-        st.error("😕 Password incorrect")
-        return False
-    return True
+# Azure SSO Config from Secrets
+CLIENT_ID = load_secret("azure_client_id")
+CLIENT_SECRET = load_secret("azure_client_secret")
+TENANT_ID = load_secret("azure_tenant_id")
+REDIRECT_URI = load_secret("azure_redirect_uri")
+AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
+SCOPE = ["User.Read"]
+
+# --- 3. SSO LOGIN LOGIC ---
+def get_msal_app():
+    return msal.ConfidentialClientApplication(
+        CLIENT_ID, authority=AUTHORITY, client_credential=CLIENT_SECRET
+    )
+
+def check_password():
+    # Check if already authenticated in session
+    if st.session_state.get("authenticated"):
+        return True
+
+    # Handle SSO Callback (Microsoft sending user back with a code)
+    query_params = st.query_params
+    if "code" in query_params:
+        app = get_msal_app()
+        result = app.acquire_token_by_authorization_code(
+            query_params["code"], 
+            scopes=SCOPE, 
+            redirect_uri=REDIRECT_URI
+        )
+        if "error" not in result:
+            # Capture SSO Info
+            st.session_state["authenticated"] = True
+            st.session_state["sso_user_email"] = result.get("id_token_claims").get("preferred_username")
+            st.session_state["sso_user_name"] = result.get("id_token_claims").get("name")
+            
+            # Clean URL and keep existing 'user' param if present
+            current_user_id = query_params.get("user")
+            st.query_params.clear()
+            if current_user_id:
+                st.query_params["user"] = current_user_id
+            st.rerun()
+        else:
+            st.error(f"Authentication Failed: {result.get('error_description')}")
+
+    # Login UI
+    st.markdown("<h2 style='text-align: center;'>🔐 ASM Evaluator Portal</h2>", unsafe_allow_html=True)
+    _, center, _ = st.columns([1, 1.5, 1])
+    with center:
+        st.info("Please sign in with your Microsoft 365 account to access this evaluation form.")
+        msal_app = get_msal_app()
+        auth_url = msal_app.get_authorization_request_url(SCOPE, redirect_uri=REDIRECT_URI)
+        st.link_button("󰊯 Sign in with Microsoft 365", auth_url, type="primary", use_container_width=True)
+    return False
 
 if not check_password():
     st.stop()
@@ -111,6 +144,33 @@ if st.session_state.get("pending_nav"):
     st.session_state.is_editing = False
     del st.session_state["pending_nav"]
     st.rerun()
+
+# --- 9. HEADER (Now with SSO Info) ---
+cache_buster = int(datetime.now().timestamp())
+col_img, col_txt, col_sso = st.columns([1, 2.5, 1.5])
+
+with col_img:
+    clean_name = current_user.replace(' ', '_')
+    img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{clean_name}.png?t={cache_buster}"
+    st.markdown(f'<div style="text-align: center;"><img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; border: 3px solid #1E3A8A;" onerror="this.src=\'https://ui-avatars.com/api/?name={current_user}\'"></div>', unsafe_allow_html=True)
+
+with col_txt:
+    st.title(f"Welcome, {current_user}")
+    st.write("Official ASM Evaluation Portal")
+
+with col_sso:
+    st.markdown(f"""
+        <div style="background-color: #f0f2f6; padding: 10px; border-radius: 10px; border-left: 5px solid #1E3A8A;">
+            <p style="margin:0; font-size: 0.8em; color: gray;">Signed in as:</p>
+            <p style="margin:0; font-weight: bold;">{st.session_state.get('sso_user_name', 'N/A')}</p>
+            <p style="margin:0; font-size: 0.8em;">{st.session_state.get('sso_user_email', 'N/A')}</p>
+        </div>
+    """, unsafe_allow_html=True)
+    if st.button("Logout", icon="🚪", use_container_width=True):
+        st.session_state["authenticated"] = False
+        st.rerun()
+
+st.divider()
 
 # --- 9. HEADER ---
 cache_buster = int(datetime.now().timestamp())
@@ -329,4 +389,5 @@ else:
     else:
         st.divider()
         st.info(f"💡 Complete the **{len(remaining)}** remaining proposal(s) to finalize.")
+
 

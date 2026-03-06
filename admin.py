@@ -290,41 +290,74 @@ def add_item_sql(table, column, value):
 cache_buster = int(time.time())
 
 with st.sidebar:
+
     st.title("🛡️ ASM Admin")
+
     
-    # 1. External Page Navigation (Switching Files)
-    st.subheader("📍 Navigation")
-    st.page_link("admin.py", label="Admin Dashboard", icon="🏠")
-    st.page_link("pages/📊_reports.py", label="Detailed Reports", icon="📊")
+
+    if st.button("🚪 Logout", use_container_width=True):
+
+        cookie_manager.delete("asm_admin_user") 
+
+        st.session_state["authenticated"] = False
+
+        st.session_state["username"] = None
+
+        st.rerun()
+
     
+
     st.divider()
 
-    # 2. Internal Section Navigation (Radio Menu)
-    menu_options = ["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"]
-    if st.session_state.get("user_role") == "SuperAdmin":
-        menu_options.append("🔑 User Management")
-    
-    menu_choice = st.radio("Go to Section:", menu_options)
-    
-    st.divider()
-
-    # 3. Session & Utility Controls
     auto_refresh = st.toggle("🔄 Auto Refresh (15s)", value=False)
+
     if auto_refresh: 
+
         st_autorefresh(interval=15000, key="admin_refresh")
 
-    if st.session_state.get("user_role") in ["SuperAdmin", "Editor"]:
+    
+
+    menu_options = ["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"]
+
+    if st.session_state.get("user_role") == "SuperAdmin":
+
+        menu_options.append("🔑 User Management")
+
+    
+
+    menu_choice = st.radio("Navigate to:", menu_options)
+
+    
+
+    if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
+
+        st.divider()
+
         st.subheader("🚀 Session Control")
+
         force_mode = st.toggle("⚠️ Enable Force Archive")
+
         if st.button("🆕 Archive & Reset", type="primary", use_container_width=True, disabled=not force_mode):
+
             with conn.session as s:
+
                 s.execute(text("INSERT INTO scores_history SELECT *, NOW() as archive_timestamp FROM scores;"))
+
                 s.execute(text("TRUNCATE TABLE scores RESTART IDENTITY CASCADE;"))
+
                 s.commit()
+
             st.balloons()
+
             time.sleep(1)
+
             st.rerun()
 
+            st.divider()
+
+    st.page_link("admin.py", label="Home", icon="🏠")
+
+    st.page_link("pages/📊_reports.py", label="Detailed Reports", icon="📊")
     st.divider()
     
     # 4. Logout (Placed at bottom for better UX)
@@ -516,6 +549,7 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 
 

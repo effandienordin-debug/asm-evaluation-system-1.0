@@ -9,5 +9,5 @@ qrcode[pil]
 matplotlib
 msal
 extra-streamlit-components
-
-
+matplotlib
+fpdf

@@ -141,14 +141,9 @@ def bulk_add_proposals_dialog():
             st.success(f"✅ Successfully added {len(cleaned_items)} proposals!")
             time.sleep(1)
             st.rerun()
-            else:
-                st.error("No valid titles found.")
-        else:
-            st.error("Please enter some text.")
-            
+
 @st.dialog("✏️ Edit Evaluator")
 def edit_evaluator_dialog(old_name, old_nick, old_email, old_pwd):
-    # Use .get() or provide defaults to ensure these are never None
     new_name = st.text_input("Full Name", value=str(old_name or ""))
     new_nick = st.text_input("Nickname", value=str(old_nick or ""))
     new_email = st.text_input("Email", value=str(old_email or ""))
@@ -156,7 +151,6 @@ def edit_evaluator_dialog(old_name, old_nick, old_email, old_pwd):
     new_photo = st.file_uploader("Update Photo (Optional)", type=['png', 'jpg', 'jpeg'])
     
     if st.button("Save Changes", type="primary"):
-        # ✅ Safety: Ensure we have strings before stripping
         clean_name = new_name.strip() if new_name else ""
         clean_nick = new_nick.strip() if new_nick else ""
         clean_email = new_email.strip() if new_email else ""
@@ -172,11 +166,8 @@ def edit_evaluator_dialog(old_name, old_nick, old_email, old_pwd):
                 SET name = :new, nickname = :nick, email = :em, password = :pw 
                 WHERE name = :old
             """), {
-                "new": clean_name, 
-                "nick": clean_nick, 
-                "em": clean_email, 
-                "pw": clean_pwd, 
-                "old": old_name
+                "new": clean_name, "nick": clean_nick, 
+                "em": clean_email, "pw": clean_pwd, "old": old_name
             })
             s.execute(text("UPDATE scores SET evaluator = :new WHERE evaluator = :old"), {"new": clean_name, "old": old_name})
             s.commit()
@@ -284,17 +275,14 @@ def add_item_sql(table, column, value):
 
 # --- 7. SIDEBAR NAVIGATION ---
 cache_buster = int(time.time())
-cookie_manager = stx.CookieManager() # Initialize here for logout use
 
-# --- 7. SIDEBAR NAVIGATION ---
 with st.sidebar:
     st.title("🛡️ ASM Admin")
     
-    # REMOVE this line: cookie_manager = stx.CookieManager()
-    
     if st.button("🚪 Logout", use_container_width=True):
-        cookie_manager.delete("asm_admin_user") # This now uses the global manager
+        cookie_manager.delete("asm_admin_user") 
         st.session_state["authenticated"] = False
+        st.session_state["username"] = None
         st.rerun()
     
     st.divider()
@@ -303,7 +291,7 @@ with st.sidebar:
         st_autorefresh(interval=15000, key="admin_refresh")
     
     menu_options = ["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"]
-    if st.session_state["user_role"] == "SuperAdmin":
+    if st.session_state.get("user_role") == "SuperAdmin":
         menu_options.append("🔑 User Management")
     
     menu_choice = st.radio("Navigate to:", menu_options)
@@ -493,14 +481,4 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
-
-
-
-
-
-
-
-
-
-
 

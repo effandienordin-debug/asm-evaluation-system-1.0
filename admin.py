@@ -325,7 +325,7 @@ elif menu_choice == "👤 Evaluators & Links":
                 st.rerun()
             if c7.button("🗑️", key=f"del_eval_{e}"): confirm_delete_dialog("evaluators", "name", e)
 
-            elif menu_choice == "🔑 User Management":
+elif menu_choice == "🔑 User Management":
     st.header("🔑 System Admin Accounts")
     if st.button("➕ Add New Admin"):
         add_user_dialog()
@@ -355,4 +355,5 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 

@@ -7,15 +7,7 @@ from datetime import datetime
 from sqlalchemy import text
 from streamlit_autorefresh import st_autorefresh
 
-# --- 0. INITIALIZE SESSION STATE ---
-if "authenticated" not in st.session_state:
-    st.session_state["authenticated"] = False
-if "current_user" not in st.session_state:
-    st.session_state["current_user"] = None
-if "logging_out" not in st.session_state:
-    st.session_state["logging_out"] = False
-
-# --- 1. CONFIGURATION ---
+# --- 1. CONFIGURATION (STRICT SECRETS) ---
 CLIENT_ID = st.secrets["azure_client_id"]
 CLIENT_SECRET = st.secrets["azure_client_secret"]
 TENANT_ID = st.secrets["azure_tenant_id"]
@@ -32,122 +24,117 @@ CRITERIA = [
 st.set_page_config(page_title="ASM Evaluator Entry", layout="wide")
 conn = st.connection("postgresql", type="sql")
 
-# --- 2. AUTHENTICATION UTILITIES ---
+# --- 2. SESSION STATE INITIALIZATION ---
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = False
+if "current_user" not in st.session_state:
+    st.session_state["current_user"] = None
+if "auth_flow" not in st.session_state:
+    st.session_state["auth_flow"] = None
+
+# --- 3. AUTHENTICATION LOGIC ---
 def get_msal_app():
+    # Using the specific Tenant ID for security
     return msal.ConfidentialClientApplication(
         CLIENT_ID, 
         authority=f"https://login.microsoftonline.com/{TENANT_ID}",
         client_credential=CLIENT_SECRET
     )
 
-def get_auth_url():
-    app = get_msal_app()
-    # Scopes must match exactly
-    flow = app.initiate_auth_code_flow(["User.Read"], redirect_uri=REDIRECT_URI)
-    st.session_state["auth_flow"] = flow
-    return flow.get("auth_uri", "")
-
-def handle_sso_callback():
-    params = dict(st.query_params)
-    if "code" in params and "auth_flow" in st.session_state:
-        try:
-            app = get_msal_app()
-            token_result = app.acquire_token_by_auth_code_flow(
-                st.session_state["auth_flow"], 
-                params
-            )
-            if "id_token_claims" in token_result:
-                ms_email = token_result["id_token_claims"].get("preferred_username").lower().strip()
-                st.query_params.clear() 
-                if "auth_flow" in st.session_state:
-                    del st.session_state["auth_flow"]
-                return ms_email
-        except Exception as e:
-            st.session_state["login_error"] = f"Error: {str(e)}"
-    return None
-
-# --- 3. THE LOGIN GATEKEEPER ---
 def check_auth():
-    # 1. Check if already logged in
-    if st.session_state.get("authenticated"):
+    # If already logged in, let them through
+    if st.session_state["authenticated"]:
         return True
 
-    # 2. Check the URL for the 'code' from Microsoft
-    # We use st.query_params.to_dict() to ensure we get a fresh copy of the URL
+    # Check URL for the 'code' returned by Microsoft
     params = st.query_params.to_dict()
     
     if "code" in params:
-        # If we see a code, STOP showing the login button and process it
-        with st.status("Verifying with Microsoft...", expanded=True) as status:
-            try:
-                app = get_msal_app()
-                # Use the auth_flow we saved before the redirect
-                flow = st.session_state.get("auth_flow")
+        if not st.session_state["auth_flow"]:
+            st.error("Authentication session expired. Please try clicking the button again.")
+            st.query_params.clear()
+            time.sleep(2)
+            st.rerun()
+            
+        try:
+            app = get_msal_app()
+            result = app.acquire_token_by_auth_code_flow(st.session_state["auth_flow"], params)
+            
+            if "id_token_claims" in result:
+                email = result["id_token_claims"].get("preferred_username").lower().strip()
                 
-                if not flow:
-                    st.error("Session expired. Please click login again.")
-                    time.sleep(2)
+                # Verify email exists in your evaluators table
+                user_match = conn.query(
+                    "SELECT name FROM evaluators WHERE LOWER(sso_email) = :e LIMIT 1", 
+                    params={"e": email}, 
+                    ttl=0
+                )
+                
+                if not user_match.empty:
+                    st.session_state["authenticated"] = True
+                    st.session_state["current_user"] = user_match.iloc[0]['name']
                     st.query_params.clear()
                     st.rerun()
-
-                result = app.acquire_token_by_auth_code_flow(flow, params)
-                
-                if "id_token_claims" in result:
-                    email = result["id_token_claims"].get("preferred_username").lower().strip()
-                    
-                    # Verify user in your Database
-                    user_match = conn.query(
-                        "SELECT name FROM evaluators WHERE LOWER(sso_email) = :e LIMIT 1", 
-                        params={"e": email}, 
-                        ttl=0
-                    )
-                    
-                    if not user_match.empty:
-                        status.update(label="✅ Access Granted!", state="complete")
-                        st.session_state["authenticated"] = True
-                        st.session_state["current_user"] = user_match.iloc[0]['name']
-                        # IMPORTANT: Clear params so we don't try to reuse the same code
-                        st.query_params.clear() 
-                        st.rerun()
-                    else:
-                        st.error(f"❌ {email} is not authorized in this system.")
-                        st.stop()
                 else:
-                    st.error(f"Microsoft Error: {result.get('error_description')}")
+                    st.error(f"❌ Access Denied: {email} is not authorized in the database.")
                     st.stop()
-            except Exception as e:
-                st.error(f"Authentication Failed: {e}")
+            else:
+                st.error(f"Auth Error: {result.get('error_description', 'Unknown Microsoft Error')}")
                 st.stop()
+        except Exception as e:
+            st.error(f"System Error: {str(e)}")
+            st.stop()
 
-    # 3. If no code and not authenticated, show the Login Page
+    # If no code and not logged in, show the Login Page
     st.title("🛡️ ASM Evaluator Portal")
-    auth_url = get_auth_url()
-    
-    # Use the 'Emergency' HTML button with target="_top"
+    st.info("Authorized Personnel Only")
+
+    # Generate the Auth URL and save the flow to session state
+    app = get_msal_app()
+    flow = app.initiate_auth_code_flow(["User.Read"], redirect_uri=REDIRECT_URI)
+    st.session_state["auth_flow"] = flow
+    auth_url = flow.get("auth_uri")
+
+    # THE BUTTON: Using target="_top" to break out of the Streamlit iframe
     st.markdown(
         f"""
-        <a href="{auth_url}" target="_top" style="
-            text-decoration: none; display: block; width: 100%; 
-            background-color: #1E3A8A; color: white; padding: 20px; 
-            text-align: center; border-radius: 10px; font-weight: bold; 
-            font-size: 20px; margin-top: 20px;
-        ">🚀 SIGN IN WITH MICROSOFT</a>
+        <div style="text-align: center; margin-top: 50px;">
+            <a href="{auth_url}" target="_top" style="
+                text-decoration: none; background-color: #1E3A8A; color: white; 
+                padding: 25px 50px; border-radius: 12px; font-weight: bold; 
+                font-size: 24px; display: inline-block; box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            ">🚀 SIGN IN WITH MICROSOFT</a>
+            <p style="margin-top: 20px; color: #666;">This will redirect you to the secure Microsoft login page.</p>
+        </div>
         """,
         unsafe_allow_html=True
     )
+    
+    # Optional Manual Admin Login
+    with st.expander("Admin/Local Login"):
+        with st.form("local_login"):
+            u_name = st.text_input("Name")
+            u_pass = st.text_input("Password", type="password")
+            if st.form_submit_button("Login"):
+                res = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
+                db_pass = res.iloc[0]['value'] if not res.empty else None
+                if u_pass == db_pass:
+                    st.session_state["authenticated"] = True
+                    st.session_state["current_user"] = u_name
+                    st.rerun()
     st.stop()
 
-# --- 4. APP LOGIC ---
+# --- 4. EXECUTE AUTH ---
 check_auth()
 
-if st.session_state["logging_out"]:
+# --- 5. LOGOUT HANDLER ---
+if st.sidebar.button("🚪 Logout"):
     logout_url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/logout?post_logout_redirect_uri={REDIRECT_URI}"
     st.session_state.clear()
-    # Full page redirect for logout
     st.markdown(f'<meta http-equiv="refresh" content="0;URL=\'{logout_url}\'">', unsafe_allow_html=True)
     st.stop()
 
-# --- 5. MAIN EVALUATION SYSTEM (UNCHANGED) ---
+# --- 6. MAIN APPLICATION CONTENT ---
 current_user = st.session_state["current_user"]
 st_autorefresh(interval=30000, key="evaluator_heartbeat")
 
@@ -167,6 +154,7 @@ def get_cloud_list(table, column):
 
 PROPOSALS = get_cloud_list("proposals", "title")
 
+# Header Section
 col_img, col_txt = st.columns([1, 4])
 with col_img:
     img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{current_user.replace(' ', '_')}.png"
@@ -174,10 +162,8 @@ with col_img:
 
 with col_txt:
     st.title(f"Welcome, {current_user}")
-    if st.button("🚪 Sign Out", use_container_width=True):
-        st.session_state["logging_out"] = True
-        st.rerun()
 
+# Progress Section
 try:
     scored_df = conn.query("SELECT proposal_title, total, recommendation, comments FROM scores WHERE evaluator = :ev", params={"ev": current_user}, ttl=0)
     completed_proposals = scored_df['proposal_title'].tolist() if not scored_df.empty else []
@@ -189,6 +175,7 @@ st.write(f"**Progress: {len(completed_proposals)} / {len(PROPOSALS)} Proposals**
 st.progress(len(completed_proposals) / len(PROPOSALS) if PROPOSALS else 0)
 st.divider()
 
+# Selection Logic
 if "proposal_selector" not in st.session_state:
     st.session_state.proposal_selector = "-- Select --"
 
@@ -206,10 +193,10 @@ if selected_proposal != "-- Select --":
         st.success(f"✅ Record found for: {selected_proposal}")
         st.metric("Total Score", f"{existing_data['total']} / 5.0")
         c1, c2 = st.columns(2)
-        if c1.button("✏️ Edit", use_container_width=True):
+        if c1.button("✏️ Edit Record", use_container_width=True):
             st.session_state.is_editing = True
             st.rerun()
-        c2.button("⬅️ Summary", use_container_width=True, on_click=nav_to_summary)
+        c2.button("⬅️ Back to Summary", use_container_width=True, on_click=nav_to_summary)
     else:
         with st.form("eval_form"):
             st.subheader(f"Evaluating: {selected_proposal}")
@@ -244,15 +231,14 @@ if selected_proposal != "-- Select --":
                         total=EXCLUDED.total, recommendation=EXCLUDED.recommendation, comments=EXCLUDED.comments, last_updated=EXCLUDED.last_updated"""),
                         {"ev": current_user, "prop": selected_proposal, "s1": inputs['Strategic Alignment'], "s2": inputs['Potential Impact'], "s3": inputs['Feasibility'], "s4": inputs['Budget Justification'], "s5": inputs['Timeline Readiness'], "s6": inputs['Execution Strategy'], "tot": final_total, "rec": recom, "comm": final_comm, "ts": datetime.now()})
                     s.commit()
-                st.success("Saved!"); time.sleep(1); st.rerun()
+                st.success("Evaluation Saved!"); time.sleep(1); st.rerun()
 else:
-    st.subheader("📊 Your Summary")
+    st.subheader("📊 Your Evaluation Summary")
     if not scored_df.empty:
         st.dataframe(scored_df[["proposal_title", "total", "recommendation"]], use_container_width=True, hide_index=True)
     
     rem = [p for p in PROPOSALS if p not in completed_proposals]
     if rem:
-        with st.expander(f"⏳ Remaining ({len(rem)})"):
+        with st.expander(f"⏳ Pending Evaluations ({len(rem)})"):
             for p in rem:
-                st.button(f"📝 Start: {p}", key=f"btn_{p}", use_container_width=True, on_click=nav_to_proposal, args=(p,))
-
+                st.button(f"📝 Start Scoring: {p}", key=f"btn_{p}", use_container_width=True, on_click=nav_to_proposal, args=(p,))

@@ -41,16 +41,16 @@ def get_msal_app():
     )
 
 def get_auth_url():
-    app = get_msal_app()
-    # Scopes must match exactly across all parts of the app
-    flow = app.initiate_auth_code_flow(["User.Read"], redirect_uri=REDIRECT_URI)
-    st.session_state["auth_flow"] = flow
-    return flow.get("auth_uri", "#")
+    try:
+        app = get_msal_app()
+        flow = app.initiate_auth_code_flow(["User.Read"], redirect_uri=REDIRECT_URI)
+        st.session_state["auth_flow"] = flow
+        return flow.get("auth_uri", "")
+    except Exception as e:
+        return f"ERROR: {str(e)}"
 
 def handle_sso_callback():
-    # Convert Streamlit QueryParams to standard dict for MSAL
     params = dict(st.query_params)
-    
     if "code" in params and "auth_flow" in st.session_state:
         try:
             app = get_msal_app()
@@ -58,7 +58,6 @@ def handle_sso_callback():
                 st.session_state["auth_flow"], 
                 params
             )
-            
             if "id_token_claims" in token_result:
                 ms_email = token_result["id_token_claims"].get("preferred_username").lower().strip()
                 st.query_params.clear() 
@@ -66,9 +65,9 @@ def handle_sso_callback():
                     del st.session_state["auth_flow"]
                 return ms_email
             else:
-                st.session_state["login_error"] = token_result.get("error_description", "Token Error")
+                st.session_state["login_error"] = token_result.get("error_description", "Auth Failed")
         except Exception as e:
-            st.session_state["login_error"] = f"Callback Error: {str(e)}"
+            st.session_state["login_error"] = f"Error: {str(e)}"
     return None
 
 # --- 3. THE LOGIN GATEKEEPER ---
@@ -76,11 +75,8 @@ def check_auth():
     if st.session_state["authenticated"]:
         return True
 
-    # Check for incoming Microsoft redirect results
     ms_email = handle_sso_callback()
-    
     if ms_email:
-        # Check against Supabase database
         user_data = conn.query(
             "SELECT name FROM evaluators WHERE LOWER(TRIM(sso_email)) = :e LIMIT 1", 
             params={"e": ms_email}, 
@@ -91,36 +87,31 @@ def check_auth():
             st.session_state["current_user"] = user_data.iloc[0]['name']
             st.rerun()
         else:
-            st.session_state["login_error"] = f"❌ Access Denied: {ms_email} is not authorized."
+            st.session_state["login_error"] = f"❌ Access Denied: {ms_email} not found."
             st.rerun()
-
-    if "login_error" in st.session_state:
-        st.error(st.session_state["login_error"])
-        if st.button("🔄 Try Again"):
-            del st.session_state["login_error"]
-            st.rerun()
-        st.stop()
 
     st.title("🛡️ ASM Evaluator Portal")
-    st.warning("🔒 Authorized Access Only")
     
     tab1, tab2 = st.tabs(["Microsoft SSO", "Local Login"])
     
     with tab1:
-        try:
-            auth_url = get_auth_url()
-            # The JS button forces the whole page to redirect, escaping the iframe
+        auth_url = get_auth_url()
+        
+        # DEBUG: Only shows if the URL fails to generate
+        if "ERROR" in auth_url or not auth_url:
+            st.error(f"Failed to generate Microsoft Login URL: {auth_url}")
+            st.info(f"Check your Redirect URI: {REDIRECT_URI}")
+        else:
+            # Reverting to the window.top.location JS button
             login_html = f"""
                 <div style="text-align: center;">
-                    <button id="ms-btn" onclick="window.top.location.href='{auth_url}'" 
-                        style="width: 100%; background-color: #1E3A8A; color: white; padding: 18px;
-                        border: none; border-radius: 8px; cursor: pointer; font-weight: bold;
-                        font-size: 18px;">🚀 Sign in with Microsoft</button>
+                    <button onclick="window.top.location.href='{auth_url}'" 
+                        style="width: 100%; background-color: #1E3A8A; color: white; padding: 20px;
+                        border: none; border-radius: 10px; cursor: pointer; font-weight: bold;
+                        font-size: 20px;">🚀 Sign in with Microsoft</button>
                 </div>
             """
             st.components.v1.html(login_html, height=120)
-        except Exception as e:
-            st.error(f"Configuration Error: {e}")
 
     with tab2:
         with st.form("local_login"):
@@ -138,7 +129,7 @@ def check_auth():
                     st.error("Invalid credentials.")
     st.stop()
 
-# --- 4. APP LOGIC & LOGOUT ---
+# --- 4. APP LOGIC ---
 check_auth()
 
 if st.session_state["logging_out"]:
@@ -147,10 +138,10 @@ if st.session_state["logging_out"]:
     st.components.v1.html(f"<script>window.top.location.href = '{logout_url}';</script>", height=0)
     st.stop()
 
+# --- 5. MAIN CONTENT (STAYED THE SAME) ---
 current_user = st.session_state["current_user"]
 st_autorefresh(interval=30000, key="evaluator_heartbeat")
 
-# Navigation Callbacks
 def nav_to_summary():
     st.session_state.proposal_selector = "-- Select --"
     st.session_state.is_editing = False
@@ -158,9 +149,6 @@ def nav_to_summary():
 def nav_to_proposal(title):
     st.session_state.proposal_selector = title
     st.session_state.is_editing = False
-
-def enable_editing():
-    st.session_state.is_editing = True
 
 def get_cloud_list(table, column):
     try:
@@ -170,7 +158,6 @@ def get_cloud_list(table, column):
 
 PROPOSALS = get_cloud_list("proposals", "title")
 
-# --- 5. HEADER & SIGN OUT ---
 col_img, col_txt = st.columns([1, 4])
 with col_img:
     img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{current_user.replace(' ', '_')}.png"
@@ -182,7 +169,6 @@ with col_txt:
         st.session_state["logging_out"] = True
         st.rerun()
 
-# --- 6. PROGRESS TRACKING ---
 try:
     scored_df = conn.query("SELECT proposal_title, total, recommendation, comments FROM scores WHERE evaluator = :ev", params={"ev": current_user}, ttl=0)
     completed_proposals = scored_df['proposal_title'].tolist() if not scored_df.empty else []
@@ -194,7 +180,6 @@ st.write(f"**Progress: {len(completed_proposals)} / {len(PROPOSALS)} Proposals**
 st.progress(len(completed_proposals) / len(PROPOSALS) if PROPOSALS else 0)
 st.divider()
 
-# --- 7. EVALUATION FORM ---
 if "proposal_selector" not in st.session_state:
     st.session_state.proposal_selector = "-- Select --"
 
@@ -212,7 +197,7 @@ if selected_proposal != "-- Select --":
         st.success(f"✅ Record found for: {selected_proposal}")
         st.metric("Total Score", f"{existing_data['total']} / 5.0")
         c1, c2 = st.columns(2)
-        c1.button("✏️ Edit", use_container_width=True, on_click=enable_editing)
+        c1.button("✏️ Edit", use_container_width=True, on_click=lambda: st.session_state.update({"is_editing": True}))
         c2.button("⬅️ Summary", use_container_width=True, on_click=nav_to_summary)
     else:
         with st.form("eval_form"):

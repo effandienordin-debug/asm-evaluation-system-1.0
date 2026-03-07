@@ -133,18 +133,27 @@ def edit_evaluator_dialog(name, nick, email, pwd):
 @st.dialog("➕ Add Admin User")
 def add_user_dialog():
     with st.form("new_user_form"):
-        u = st.text_input("Username")
-        p = st.text_input("Password", type="password")
+        u = st.text_input("Username").strip()
+        p = st.text_input("Password", type="password").strip()
         r = st.selectbox("Role", ["Viewer", "Editor", "SuperAdmin"])
+        
         if st.form_submit_button("Create Account"):
-            if u and p:
-                with conn.session as s:
-                    s.execute(text("INSERT INTO users (username, password_hash, role) VALUES (:u, :p, :r)"),
-                              {"u": u, "p": p, "r": r})
-                    s.commit()
-                st.success(f"User {u} created!")
-                time.sleep(1)
-                st.rerun()
+            # Validation Check
+            if not u or not p:
+                st.error("🚨 **Username and Password cannot be blank!**")
+            else:
+                try:
+                    with conn.session as s:
+                        s.execute(
+                            text("INSERT INTO users (username, password_hash, role) VALUES (:u, :p, :r)"),
+                            {"u": u, "p": p, "r": r}
+                        )
+                        s.commit()
+                    st.success(f"✅ User {u} created!")
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error creating user: {e}")
 
 @st.dialog("✏️ Edit Admin User")
 def edit_user_dialog(user_id, username, role):
@@ -378,6 +387,7 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 
 

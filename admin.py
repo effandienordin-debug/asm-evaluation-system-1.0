@@ -129,15 +129,7 @@ if menu_choice == "📊 Tracker":
     df_scores = conn.query("SELECT * FROM scores;", ttl=0)
     props_all = get_items_sql("proposals", "title")
     evals_df = conn.query("SELECT name, nickname FROM evaluators ORDER BY name ASC;", ttl=0)
-
-# --- 8. MAIN CONTENT AREA ---
-
-if menu_choice == "📊 Tracker":
-    st.header("📊 Live Proposal Progress")
-    df_scores = conn.query("SELECT * FROM scores;", ttl=0)
-    props_all = get_items_sql("proposals", "title")
-    evals_df = conn.query("SELECT name, nickname FROM evaluators ORDER BY name ASC;", ttl=0)
-    
+   
     total_props_count = len(props_all)
     total_required = total_props_count * len(evals_df)
     current_total_submissions = len(df_scores) if not df_scores.empty else 0
@@ -312,3 +304,4 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+

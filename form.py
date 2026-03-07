@@ -16,9 +16,11 @@ if "logging_out" not in st.session_state:
     st.session_state["logging_out"] = False
 
 # --- 1. CONFIGURATION ---
+# Mapping variables to your specific secrets.toml keys
 CLIENT_ID = st.secrets["azure_client_id"]
 CLIENT_SECRET = st.secrets["azure_client_secret"]
 TENANT_ID = st.secrets["azure_tenant_id"]
+REDIRECT_URI = st.secrets["azure_redirect_uri"] 
 SUPABASE_URL = st.secrets["supabase_url"]
 BUCKET_NAME = "evaluator-photos"
 
@@ -40,21 +42,27 @@ def get_msal_app():
     )
 
 def get_auth_url():
-    return get_msal_app().get_authorization_request_url(["User.Read"])
+    app = get_msal_app()
+    # initiate_auth_code_flow creates a secure, one-time use URL
+    flow = app.initiate_auth_code_flow(["User.Read"], redirect_uri=REDIRECT_URI)
+    st.session_state["auth_flow"] = flow
+    return flow.get("auth_uri", "#")
 
 def handle_sso_callback():
     params = st.query_params
-    if "code" in params:
-        code = params["code"]
+    if "code" in params and "auth_flow" in st.session_state:
         try:
-            token_result = get_msal_app().acquire_token_by_authorization_code(
-                code,
-                scopes=["User.Read"],
-                redirect_uri=st.secrets.get("redirect_uri")
+            app = get_msal_app()
+            # Validate the code against the flow stored in session state
+            token_result = app.acquire_token_by_auth_code_flow(
+                st.session_state["auth_flow"], 
+                params
             )
             if "id_token_claims" in token_result:
                 ms_email = token_result["id_token_claims"].get("preferred_username").lower()
                 st.query_params.clear() 
+                if "auth_flow" in st.session_state:
+                    del st.session_state["auth_flow"]
                 return ms_email
         except Exception as e:
             st.session_state["login_error"] = f"Authentication Error: {str(e)}"
@@ -95,15 +103,13 @@ def check_auth():
     tab1, tab2 = st.tabs(["Microsoft SSO", "Local Login"])
     
     with tab1:
-        # 1. Generate the URL and verify it's not empty
         try:
             auth_url = get_auth_url()
         except Exception as e:
             st.error(f"Error generating Auth URL: {e}")
             auth_url = "#"
 
-        # 2. Updated HTML with a stronger JS redirect and a CSS hover effect
-        # We use window.top.location to break out of the Streamlit iframe
+        # JS window.top.location ensures we redirect the main page, not just the iframe
         login_html = f"""
             <div style="text-align: center;">
                 <button id="sso-button" 
@@ -113,8 +119,8 @@ def check_auth():
                         border: none; border-radius: 8px; cursor: pointer; font-weight: bold;
                         font-size: 18px; transition: 0.3s;
                     ">🚀 Sign in with Microsoft</button>
-                <p style="margin-top: 10px; font-size: 12px; color: #666;">
-                    If the button doesn't respond, <a href="{auth_url}" target="_top">click here to redirect</a>
+                <p style="margin-top: 10px; font-size: 13px; color: #666;">
+                    If the button doesn't respond, <a href="{auth_url}" target="_top" style="color: #1E3A8A; text-decoration: underline;">click here to redirect</a>
                 </p>
             </div>
             <script>
@@ -130,7 +136,6 @@ def check_auth():
             u_name = st.text_input("Evaluator Name")
             u_pass = st.text_input("Password", type="password")
             if st.form_submit_button("Login", use_container_width=True):
-                # Using your logic for local password checking
                 res = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
                 db_pass = res.iloc[0]['value'] if not res.empty else None
                 eval_check = conn.query("SELECT name FROM evaluators WHERE name = :n LIMIT 1", params={"n": u_name}, ttl=0)
@@ -145,9 +150,12 @@ def check_auth():
 # --- 4. APP LOGIC & LOGOUT HANDLER ---
 check_auth()
 
-# IMMEDIATE LOGOUT REDIRECTOR (Prevents the "freeze")
+# FIXED: Redirects the entire browser tab to MS Logout, then back to your app
 if st.session_state["logging_out"]:
-    logout_url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/logout?post_logout_redirect_uri={st.secrets.get('redirect_uri')}"
+    logout_url = (
+        f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/logout"
+        f"?post_logout_redirect_uri={REDIRECT_URI}"
+    )
     st.session_state.clear()
     st.components.v1.html(f"<script>window.top.location.href = '{logout_url}';</script>", height=0)
     st.stop()
@@ -183,8 +191,8 @@ with col_img:
 
 with col_txt:
     st.title(f"Welcome, {current_user}")
-    # ONE-CLICK LOGOUT BUTTON
-    if st.button("🚪 Sign Out"):
+    # Trigger the logging_out sequence
+    if st.button("🚪 Sign Out", use_container_width=True):
         st.session_state["logging_out"] = True
         st.rerun()
 
@@ -265,4 +273,3 @@ else:
         with st.expander(f"⏳ Remaining ({len(rem)})"):
             for p in rem:
                 st.button(f"📝 Start: {p}", key=f"btn_{p}", use_container_width=True, on_click=nav_to_proposal, args=(p,))
-

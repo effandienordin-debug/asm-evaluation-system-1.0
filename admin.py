@@ -60,26 +60,56 @@ def add_item_sql(table, column, value):
 # --- 2.5 DIALOGS ---
 @st.dialog("📚 Bulk Add Evaluators")
 def bulk_add_evaluators_dialog():
-    st.write("Format: **Full Name, Nickname, SSO Email** (one per line)")
-    raw_data = st.text_area("List of Evaluators", height=200, placeholder="John Doe, John, john@akademisains.gov.my")
+    st.markdown("""
+    **Format:** `Type, Full Name, Nickname, Email`  
+    Use **SSO** for staff or **EXT** for external (manual login).
+    """)
+    
+    raw_data = st.text_area(
+        "List of Evaluators", 
+        height=250, 
+        placeholder="SSO, John Doe, John, john@akademisains.gov.my\nEXT, Jane Smith, Jane, jane@gmail.com"
+    )
     
     if st.button("Import All", type="primary"):
         lines = [line.strip() for line in raw_data.split('\n') if line.strip()]
         count = 0
+        error_lines = []
+        
         with conn.session as s:
             for line in lines:
                 parts = [p.strip() for p in line.split(',')]
-                if len(parts) >= 3:
-                    name, nick, sso = parts[0], parts[1], parts[2]
-                    s.execute(text("""
-                        INSERT INTO evaluators (name, nickname, sso_email, password, has_submitted) 
-                        VALUES (:n, :nk, :sso, 'SSO_USER', FALSE) 
-                        ON CONFLICT (name) DO NOTHING;
-                    """), {"n": name, "nk": nick, "sso": sso})
-                    count += 1
+                if len(parts) >= 4:
+                    etype, name, nick, email_val = parts[0].upper(), parts[1], parts[2], parts[3]
+                    
+                    # Logic to switch columns based on Type
+                    sso_email = email_val if etype == "SSO" else None
+                    pers_email = email_val if etype == "EXT" else None
+                    # Generate a random temporary password for External users if none provided
+                    pwd = "SSO_USER" if etype == "SSO" else "ASM123!" 
+
+                    try:
+                        s.execute(text("""
+                            INSERT INTO evaluators (name, nickname, email, sso_email, password, has_submitted) 
+                            VALUES (:n, :nk, :em, :sso, :pw, FALSE) 
+                            ON CONFLICT (name) DO NOTHING;
+                        """), {"n": name, "nk": nick, "em": pers_email, "sso": sso_email, "pw": pwd})
+                        count += 1
+                    except Exception as e:
+                        error_lines.append(f"{name}: {str(e)}")
+                else:
+                    error_lines.append(f"Invalid format: {line}")
             s.commit()
-        st.success(f"✅ Successfully imported {count} staff evaluators!")
-        time.sleep(1); st.rerun()
+            
+        if error_lines:
+            st.warning(f"Imported {count} users, but had {len(error_lines)} issues.")
+            with st.expander("View Errors"):
+                for err in error_lines: st.write(err)
+        else:
+            st.success(f"✅ Successfully imported {count} evaluators!")
+        
+        time.sleep(1.5)
+        st.rerun()
 
 @st.dialog("📚 Bulk Add Proposals")
 def bulk_add_proposals_dialog():
@@ -335,3 +365,4 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+

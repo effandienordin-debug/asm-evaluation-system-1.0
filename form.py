@@ -98,53 +98,41 @@ def check_auth():
         st.info("Log in with your @akademisains.gov.my or registered corporate email.")
         auth_url = get_auth_url()
         
-        # IMPROVED JAVASCRIPT REDIRECT
+        # JAVASCRIPT REDIRECT WITH LOADING SPINNER
         login_html = f"""
-            <div id="login-container" style="display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%;">
+            <div id="login-container" style="display: flex; justify-content: center; flex-direction: column; align-items: center;">
                 <button id="sso-button" onclick="startLogin()" style="
                     width: 100%; background-color: #1E3A8A; color: white; padding: 14px;
                     border: none; border-radius: 8px; cursor: pointer; font-weight: bold;
-                    font-size: 16px; transition: all 0.3s ease;
+                    font-size: 16px; display: flex; align-items: center; justify-content: center;
                 ">
                     <span id="btn-text">🚀 Sign in with Microsoft</span>
                 </button>
-                <div id="loader" style="display: none; margin-top: 15px; border: 4px solid #f3f3f3; border-top: 4px solid #1E3A8A; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite;"></div>
-                <p id="msg" style="display: none; color: #666; font-size: 14px; margin-top: 10px;">Redirecting you to Microsoft Secure Login...</p>
+                <div id="loader" style="display: none; margin-top: 10px; border: 4px solid #f3f3f3; border-top: 4px solid #1E3A8A; border-radius: 50%; width: 30px; height: 30px; animation: spin 2s linear infinite;"></div>
             </div>
 
             <style>
                 @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
-                #sso-button:hover {{ background-color: #172e6e; transform: translateY(-1px); }}
             </style>
 
             <script>
                 function startLogin() {{
                     const btn = document.getElementById('sso-button');
                     const loader = document.getElementById('loader');
-                    const msg = document.getElementById('msg');
+                    const btnText = document.getElementById('btn-text');
                     
-                    // Update UI
-                    btn.style.opacity = '0.7';
+                    btn.style.backgroundColor = '#cccccc';
                     btn.disabled = true;
+                    btnText.innerHTML = 'Redirecting to Microsoft...';
                     loader.style.display = 'block';
-                    msg.style.display = 'block';
                     
-                    const url = "{auth_url}";
-                    
-                    // Force redirect by targeting the top-most window context
-                    try {{
-                        window.top.location.href = url;
-                    }} catch (e) {{
-                        try {{
-                            window.parent.location.href = url;
-                        }} catch (e2) {{
-                            window.location.assign(url);
-                        }}
-                    }}
+                    setTimeout(() => {{
+                        window.parent.location.href = "{auth_url}";
+                    }}, 500);
                 }}
             </script>
         """
-        st.components.v1.html(login_html, height=150)
+        st.components.v1.html(login_html, height=120)
 
     with tab2:
         with st.form("local_login"):
@@ -205,7 +193,7 @@ with col_txt:
     if st.button("🚪 Sign Out"):
         st.session_state.clear()
         st.components.v1.html(f"""
-            <script>window.top.location.href = "{logout_url}";</script>
+            <script>window.parent.location.href = "{logout_url}";</script>
         """, height=0)
         st.stop()
 

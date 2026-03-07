@@ -316,12 +316,14 @@ if menu_choice == "📊 Tracker":
             st.warning("Archiving will move all current scores to history and reset the tracker.")
             if st.button("🗄️ Force Archive & Reset Session", type="primary"):
                 try:
-                    with conn.session as s:
-                        # 1. Archive active scores
-                        s.execute(text("""
-                            INSERT INTO scores_history (evaluator, proposal_title, total_score, archive_timestamp)
-                            SELECT evaluator, proposal_title, total_score, CURRENT_TIMESTAMP FROM scores;
-                        """))
+                   with conn.session as s:
+    # 1. Archive active scores 
+    # NOTE: Ensure the column names below match your 'scores' table EXACTLY
+    s.execute(text("""
+        INSERT INTO scores_history (evaluator, proposal_title, total_score, archive_timestamp)
+        SELECT evaluator, proposal_title, total_score, CURRENT_TIMESTAMP 
+        FROM scores;
+    """))
                         # 2. Clear current session
                         s.execute(text("TRUNCATE TABLE scores;"))
                         s.execute(text("UPDATE evaluators SET has_submitted = FALSE;"))
@@ -441,4 +443,5 @@ elif menu_choice == "📜 History":
         st.dataframe(df_hist, use_container_width=True)
     else:
         st.info("ℹ️ No archived data found in history.")
+
 

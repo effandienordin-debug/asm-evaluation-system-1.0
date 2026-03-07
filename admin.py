@@ -95,9 +95,18 @@ except Exception as e:
 with st.sidebar:
     st.title("🛡️ ASM Admin")
     
-    # Page Navigation
     st.subheader("📍 Navigation")
-    st.page_link("admin.py", label="Home Dashboard", icon="🏠")
+    
+    # FIX: Try using the absolute path or just the filename 
+    # If "admin.py" fails, use the relative path "./admin.py"
+    try:
+        st.page_link("admin.py", label="Home Dashboard", icon="🏠")
+    except Exception:
+        # Fallback if the registry is being stubborn
+        st.info("🏠 Currently at Home")
+
+    # Ensure the path below exactly matches your file name on GitHub
+    # Case sensitivity matters! (e.g., Reports.py vs reports.py)
     st.page_link("pages/📊_reports.py", label="Detailed Reports", icon="📊")
     
     st.divider()
@@ -316,13 +325,5 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
-
-
-
-
-
-
-
-
 
 

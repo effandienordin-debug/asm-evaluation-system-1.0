@@ -107,6 +107,35 @@ def edit_evaluator_dialog(name, nick, email, pwd):
             s.commit()
         st.rerun()
 
+@st.dialog("➕ Add Admin User")
+def add_user_dialog():
+    with st.form("new_user_form"):
+        u = st.text_input("Username")
+        p = st.text_input("Password", type="password")
+        r = st.selectbox("Role", ["Viewer", "Editor", "SuperAdmin"])
+        if st.form_submit_button("Create Account"):
+            if u and p:
+                with conn.session as s:
+                    s.execute(text("INSERT INTO users (username, password_hash, role) VALUES (:u, :p, :r)"),
+                              {"u": u, "p": p, "r": r})
+                    s.commit()
+                st.success(f"User {u} created!")
+                time.sleep(1)
+                st.rerun()
+
+@st.dialog("✏️ Edit Admin User")
+def edit_user_dialog(user_id, username, role):
+    new_role = st.selectbox("Update Role", ["Viewer", "Editor", "SuperAdmin"], index=["Viewer", "Editor", "SuperAdmin"].index(role))
+    new_pass = st.text_input("Update Password (leave blank to keep current)", type="password")
+    if st.button("Save Changes"):
+        with conn.session as s:
+            if new_pass:
+                s.execute(text("UPDATE users SET role = :r, password_hash = :p WHERE id = :id"), {"r": new_role, "p": new_pass, "id": user_id})
+            else:
+                s.execute(text("UPDATE users SET role = :r WHERE id = :id"), {"r": new_role, "id": user_id})
+            s.commit()
+        st.rerun()
+
 # --- 3. LOGIN LOGIC ---
 def check_password():
     if st.session_state.get("authenticated"):
@@ -296,7 +325,34 @@ elif menu_choice == "👤 Evaluators & Links":
                 st.rerun()
             if c7.button("🗑️", key=f"del_eval_{e}"): confirm_delete_dialog("evaluators", "name", e)
 
+            elif menu_choice == "🔑 User Management":
+    st.header("🔑 System Admin Accounts")
+    if st.button("➕ Add New Admin"):
+        add_user_dialog()
+    
+    st.divider()
+    users_df = conn.query("SELECT id, username, role, sso_email FROM users ORDER BY id ASC;", ttl=0)
+    
+    for _, row in users_df.iterrows():
+        c1, c2, c3, c4 = st.columns([2, 2, 1, 1])
+        with c1:
+            st.write(f"👤 **{row['username']}**")
+            st.caption(f"MS Auth: {row['sso_email'] or 'Not Linked'}")
+        
+        c2.write(f"Role: `{row['role']}`")
+        
+        # Prevent users from deleting themselves accidentally
+        if c3.button("✏️", key=f"edit_u_{row['id']}"):
+            edit_user_dialog(row['id'], row['username'], row['role'])
+            
+        if row['username'] != st.session_state["username"]:
+            if c4.button("🗑️", key=f"del_u_{row['id']}"):
+                confirm_delete_dialog("users", "id", row['id'])
+        else:
+            c4.write("✅ (You)")
+
 elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+

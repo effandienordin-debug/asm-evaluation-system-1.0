@@ -185,6 +185,26 @@ def add_user_dialog():
                         s.commit()
                     st.success(f"✅ User {u} created!"); time.sleep(1); st.rerun()
                 except Exception as e: st.error(f"❌ Error: {e}")
+                    
+@st.dialog("🔑 Edit Admin User")
+def edit_user_dialog(user_id, username, role):
+    new_role = st.selectbox("Update Role", ["Viewer", "Editor", "SuperAdmin"], index=["Viewer", "Editor", "SuperAdmin"].index(role))
+    new_pass = st.text_input("Update Password (leave blank to keep current)", type="password")
+    
+    if st.button("Save Changes", type="primary"):
+        with conn.session as s:
+            if new_pass:
+                # Update both role and password
+                s.execute(text("UPDATE users SET role = :r, password_hash = :p WHERE id = :id"), 
+                          {"r": new_role, "p": new_pass, "id": user_id})
+            else:
+                # Update only the role
+                s.execute(text("UPDATE users SET role = :r WHERE id = :id"), 
+                          {"r": new_role, "id": user_id})
+            s.commit()
+        st.success("User updated!")
+        time.sleep(1)
+        st.rerun()
 
 # --- 3. LOGIN LOGIC ---
 def check_password():
@@ -365,4 +385,5 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 

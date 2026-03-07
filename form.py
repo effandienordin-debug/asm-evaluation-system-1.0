@@ -81,16 +81,44 @@ def check_auth():
     tab1, tab2 = st.tabs(["Microsoft SSO", "Local Login"])
     
     with tab1:
-        st.info("Sign in using your corporate account (Same Window).")
+    st.info("Sign in using your corporate account (Same Window).")
+    
+    try:
         auth_url = get_auth_url()
-        # Custom HTML to force redirection in the parent window (no new tab)
+        
+        # We use a mix of <a> for navigation and <button> for styling
         login_html = f"""
-            <button onclick="window.parent.location.href='{auth_url}'" style="
-                width: 100%; background-color: #1E3A8A; color: white; padding: 12px;
-                border: none; border-radius: 5px; cursor: pointer; font-weight: bold;
-            ">🚀 Sign in with Microsoft</button>
+            <div style="display: flex; justify-content: center;">
+                <a href="{auth_url}" target="_parent" style="text-decoration: none; width: 100%;">
+                    <button style="
+                        width: 100%; 
+                        background-color: #1E3A8A; 
+                        color: white; 
+                        padding: 14px;
+                        border: none; 
+                        border-radius: 8px; 
+                        cursor: pointer; 
+                        font-weight: bold;
+                        font-size: 16px;
+                        transition: 0.3s;
+                    " onmouseover="this.style.backgroundColor='#172554'" 
+                       onmouseout="this.style.backgroundColor='#1E3A8A'">
+                        🚀 Sign in with Microsoft
+                    </button>
+                </a>
+            </div>
+            <script>
+                // Force parent redirect if the <a> tag target="_parent" is ignored
+                document.querySelector('button').onclick = function(e) {{
+                    window.parent.location.href = "{auth_url}";
+                }};
+            </script>
         """
-        st.components.v1.html(login_html, height=70)
+        st.components.v1.html(login_html, height=80)
+        
+    except Exception as e:
+        st.error("Authentication Error: Could not generate Login URL.")
+        st.caption(f"Error details: {str(e)}")
 
     with tab2:
         with st.form("local_login"):
@@ -249,3 +277,4 @@ else:
                 s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
                 s.commit()
             st.rerun()
+

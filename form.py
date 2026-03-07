@@ -40,37 +40,38 @@ def get_msal_app():
 def get_auth_url():
     return get_msal_app().get_authorization_request_url(["User.Read"])
 
+# --- 2. UPDATED CALLBACK HANDLER ---
 def handle_sso_callback():
-    if "code" in st.query_params:
-        code = st.query_params["code"]
-        token_result = get_msal_app().acquire_token_by_authorization_code(
-            code,
-            scopes=["User.Read"],
-            redirect_uri=st.secrets.get("redirect_uri")
-        )
-        if "id_token_claims" in token_result:
-            ms_email = token_result["id_token_claims"].get("preferred_username").lower()
-            st.query_params.clear() 
-            return ms_email
+    # Use st.query_params (Newer Streamlit version)
+    params = st.query_params
+    if "code" in params:
+        code = params["code"]
+        try:
+            token_result = get_msal_app().acquire_token_by_authorization_code(
+                code,
+                scopes=["User.Read"],
+                redirect_uri=st.secrets.get("redirect_uri")
+            )
+            if "id_token_claims" in token_result:
+                ms_email = token_result["id_token_claims"].get("preferred_username").lower()
+                # Clear the URL so the 'code' doesn't stay there
+                st.query_params.clear() 
+                return ms_email
+        except Exception as e:
+            st.session_state["login_error"] = f"Authentication Error: {str(e)}"
+            st.query_params.clear()
+            st.rerun()
     return None
 
 # --- 3. THE LOGIN GATEKEEPER ---
 def check_auth():
-    # 1. If already logged in, just let them through
-    if st.session_state["authenticated"]:
+    if st.session_state.get("authenticated"):
         return True
 
-    # 2. Check for "Sticky" Errors from a previous attempt
-    if "login_error" in st.session_state:
-        st.error(st.session_state["login_error"])
-        if st.button("🔄 Try Again / Clear Error"):
-            del st.session_state["login_error"]
-            st.rerun()
-
-    # 3. Handle the Microsoft Redirect
+    # Check for returning SSO user BEFORE showing the UI
     ms_email = handle_sso_callback()
+    
     if ms_email:
-        # Check database
         user_data = conn.query(
             "SELECT name FROM evaluators WHERE LOWER(TRIM(sso_email)) = LOWER(:e) LIMIT 1", 
             params={"e": ms_email.strip()}, 
@@ -80,32 +81,37 @@ def check_auth():
         if not user_data.empty:
             st.session_state["authenticated"] = True
             st.session_state["current_user"] = user_data.iloc[0]['name']
-            # Clear any old errors on success
             if "login_error" in st.session_state:
                 del st.session_state["login_error"]
             st.rerun()
         else:
-            # SAVE THE ERROR TO SESSION STATE SO IT PERSISTS
-            st.session_state["login_error"] = f"🚫 Access Denied: '{ms_email}' is not in our evaluator list."
-            st.rerun() # This triggers the app to reload and show the error at the top
+            # THIS IS THE PART THAT WAS FAILING IN THE SAME WINDOW
+            st.session_state["login_error"] = f"🚫 Access Denied: {ms_email} is not registered."
+            st.rerun()
 
-    # 4. Show Login UI
+    # --- UI RENDERING ---
     st.title("🛡️ ASM Evaluator Portal")
     
+    # Show error if one exists in state
+    if "login_error" in st.session_state:
+        st.error(st.session_state["login_error"])
+        if st.button("🔄 Clear Error & Try Again"):
+            del st.session_state["login_error"]
+            st.rerun()
+
     tab1, tab2 = st.tabs(["Microsoft SSO", "Local Login"])
     
     with tab1:
-        st.info("Sign in with your registered corporate email.")
+        st.info("Sign in with your corporate email (Same Window).")
         auth_url = get_auth_url()
+        # Using window.top.location for absolute window control
         login_html = f"""
             <div style="display: flex; justify-content: center;">
-                <a href="{auth_url}" target="_top" style="text-decoration: none; width: 100%;">
-                    <button style="
-                        width: 100%; background-color: #1E3A8A; color: white; padding: 14px;
-                        border: none; border-radius: 8px; cursor: pointer; font-weight: bold;
-                        font-size: 16px;
-                    ">🚀 Sign in with Microsoft</button>
-                </a>
+                <button onclick="window.top.location.href='{auth_url}'" style="
+                    width: 100%; background-color: #1E3A8A; color: white; padding: 14px;
+                    border: none; border-radius: 8px; cursor: pointer; font-weight: bold;
+                    font-size: 16px;
+                ">🚀 Sign in with Microsoft</button>
             </div>
         """
         st.components.v1.html(login_html, height=80)
@@ -118,16 +124,13 @@ def check_auth():
                 res = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
                 db_pass = res.iloc[0]['value'] if not res.empty else None
                 eval_check = conn.query("SELECT name FROM evaluators WHERE name = :n LIMIT 1", params={"n": u_name}, ttl=0)
-                
                 if not eval_check.empty and u_pass == db_pass:
                     st.session_state["authenticated"] = True
                     st.session_state["current_user"] = u_name
                     st.rerun()
                 else:
                     st.error("Invalid name or password.")
-    
     st.stop()
-
 # --- 4. APP LOGIC ---
 check_auth()
 current_user = st.session_state["current_user"]
@@ -268,6 +271,7 @@ else:
                 s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
                 s.commit()
             st.rerun()
+
 
 
 

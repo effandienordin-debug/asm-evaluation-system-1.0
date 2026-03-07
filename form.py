@@ -59,6 +59,14 @@ def check_auth():
     if st.session_state["authenticated"]:
         return True
 
+    # Check if we are returning from a failed login attempt
+    if "login_error" in st.session_state:
+        st.error(st.session_state["login_error"])
+        if st.button("🔄 Try Again"):
+            del st.session_state["login_error"]
+            st.rerun()
+        st.stop()
+
     ms_email = handle_sso_callback()
     if ms_email:
         user_data = conn.query(
@@ -72,22 +80,28 @@ def check_auth():
             st.session_state["current_user"] = user_data.iloc[0]['name']
             st.rerun()
         else:
-            st.error(f"❌ Access Denied: {ms_email} is not registered.")
-            st.stop()
+            # Store error in session state so it survives the rerun/redirect
+            st.session_state["login_error"] = f"❌ Access Denied: {ms_email} is not registered in the ASM database."
+            st.rerun()
 
     st.title("🛡️ ASM Evaluator Portal")
+    
+    # Information Alert
+    st.warning("🔒 This system is restricted to authorized ASM Evaluators only.")
+    
     tab1, tab2 = st.tabs(["Microsoft SSO", "Local Login"])
     
     with tab1:
-        st.info("Sign in using your corporate account (Same Window).")
+        st.info("Log in with your @akademisains.gov.my or registered corporate email.")
         auth_url = get_auth_url()
-        # Ensure these lines below are indented 4 spaces further than 'with tab1:'
+        
         login_html = f"""
             <div style="display: flex; justify-content: center;">
-                <a href="{auth_url}" target="_parent" style="text-decoration: none; width: 100%;">
+                <a href="{auth_url}" target="_top" style="text-decoration: none; width: 100%;">
                     <button style="
                         width: 100%; background-color: #1E3A8A; color: white; padding: 14px;
                         border: none; border-radius: 8px; cursor: pointer; font-weight: bold;
+                        font-size: 16px;
                     ">🚀 Sign in with Microsoft</button>
                 </a>
             </div>
@@ -96,7 +110,6 @@ def check_auth():
 
     with tab2:
         with st.form("local_login"):
-            # Ensure these lines are indented under 'with st.form'
             u_name = st.text_input("Evaluator Name")
             u_pass = st.text_input("Password", type="password")
             if st.form_submit_button("Login", use_container_width=True):
@@ -109,9 +122,9 @@ def check_auth():
                     st.session_state["current_user"] = u_name
                     st.rerun()
                 else:
-                    st.error("Invalid name or password.")
+                    st.error("Invalid name or password. Please try again.")
+    
     st.stop()
-
 # --- 4. APP LOGIC ---
 check_auth()
 current_user = st.session_state["current_user"]
@@ -252,5 +265,6 @@ else:
                 s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
                 s.commit()
             st.rerun()
+
 
 

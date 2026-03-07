@@ -37,16 +37,27 @@ def get_auth_url():
     return client.get_authorization_request_url(["User.Read"])
 
 def handle_sso_callback():
-    # Capture 'code' from URL after Microsoft redirect
+    # 1. Look for the 'code' Microsoft sent back in the URL
     if "code" in st.query_params:
+        code = st.query_params["code"]
         client = get_msal_app()
+        
+        # 2. Exchange that code for an actual Identity Token
         token_result = client.acquire_token_by_authorization_code(
-            st.query_params["code"],
+            code,
             scopes=["User.Read"],
-            redirect_uri=st.secrets.get("redirect_uri", "http://localhost:8501") 
+            redirect_uri=st.secrets.get("redirect_uri") # Must match Azure EXACTLY
         )
+        
         if "id_token_claims" in token_result:
-            return token_result["id_token_claims"].get("preferred_username").lower()
+            ms_email = token_result["id_token_claims"].get("preferred_username").lower()
+            # 3. CRITICAL: Clear the URL so we don't try to reuse the same code
+            st.query_params.clear() 
+            return ms_email
+            
+        elif "error" in token_result:
+            st.error(f"Auth Error: {token_result.get('error_description')}")
+            
     return None
 
 # --- 3. LOGIN & IDENTITY CHECK ---
@@ -219,3 +230,4 @@ else:
                 s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
                 s.commit()
             st.rerun()
+

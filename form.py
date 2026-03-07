@@ -42,7 +42,6 @@ def get_auth_url():
 
 # --- 2. UPDATED CALLBACK HANDLER ---
 def handle_sso_callback():
-    # Use st.query_params (Newer Streamlit version)
     params = st.query_params
     if "code" in params:
         code = params["code"]
@@ -54,7 +53,6 @@ def handle_sso_callback():
             )
             if "id_token_claims" in token_result:
                 ms_email = token_result["id_token_claims"].get("preferred_username").lower()
-                # Clear the URL so the 'code' doesn't stay there
                 st.query_params.clear() 
                 return ms_email
         except Exception as e:
@@ -68,7 +66,6 @@ def check_auth():
     if st.session_state["authenticated"]:
         return True
 
-    # Check if we are returning from a failed login attempt
     if "login_error" in st.session_state:
         st.error(st.session_state["login_error"])
         if st.button("🔄 Try Again"):
@@ -89,13 +86,10 @@ def check_auth():
             st.session_state["current_user"] = user_data.iloc[0]['name']
             st.rerun()
         else:
-            # Store error in session state so it survives the rerun/redirect
             st.session_state["login_error"] = f"❌ Access Denied: {ms_email} is not registered in the ASM database."
             st.rerun()
 
     st.title("🛡️ ASM Evaluator Portal")
-    
-    # Information Alert
     st.warning("🔒 This system is restricted to authorized ASM Evaluators only.")
     
     tab1, tab2 = st.tabs(["Microsoft SSO", "Local Login"])
@@ -104,18 +98,41 @@ def check_auth():
         st.info("Log in with your @akademisains.gov.my or registered corporate email.")
         auth_url = get_auth_url()
         
+        # JAVASCRIPT REDIRECT WITH LOADING SPINNER
         login_html = f"""
-            <div style="display: flex; justify-content: center;">
-                <a href="{auth_url}" target="_top" style="text-decoration: none; width: 100%;">
-                    <button style="
-                        width: 100%; background-color: #1E3A8A; color: white; padding: 14px;
-                        border: none; border-radius: 8px; cursor: pointer; font-weight: bold;
-                        font-size: 16px;
-                    ">🚀 Sign in with Microsoft</button>
-                </a>
+            <div id="login-container" style="display: flex; justify-content: center; flex-direction: column; align-items: center;">
+                <button id="sso-button" onclick="startLogin()" style="
+                    width: 100%; background-color: #1E3A8A; color: white; padding: 14px;
+                    border: none; border-radius: 8px; cursor: pointer; font-weight: bold;
+                    font-size: 16px; display: flex; align-items: center; justify-content: center;
+                ">
+                    <span id="btn-text">🚀 Sign in with Microsoft</span>
+                </button>
+                <div id="loader" style="display: none; margin-top: 10px; border: 4px solid #f3f3f3; border-top: 4px solid #1E3A8A; border-radius: 50%; width: 30px; height: 30px; animation: spin 2s linear infinite;"></div>
             </div>
+
+            <style>
+                @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
+            </style>
+
+            <script>
+                function startLogin() {{
+                    const btn = document.getElementById('sso-button');
+                    const loader = document.getElementById('loader');
+                    const btnText = document.getElementById('btn-text');
+                    
+                    btn.style.backgroundColor = '#cccccc';
+                    btn.disabled = true;
+                    btnText.innerHTML = 'Redirecting to Microsoft...';
+                    loader.style.display = 'block';
+                    
+                    setTimeout(() => {{
+                        window.parent.location.href = "{auth_url}";
+                    }}, 500);
+                }}
+            </script>
         """
-        st.components.v1.html(login_html, height=80)
+        st.components.v1.html(login_html, height=120)
 
     with tab2:
         with st.form("local_login"):
@@ -171,12 +188,10 @@ with col_img:
 with col_txt:
     st.title(f"Welcome, {current_user}")
     
-    # Custom Logout: Clears Streamlit State + Microsoft Session
     logout_url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/logout?post_logout_redirect_uri={st.secrets.get('redirect_uri')}"
     
     if st.button("🚪 Sign Out"):
         st.session_state.clear()
-        # This HTML snippet triggers the MS Logout and redirects back to your app
         st.components.v1.html(f"""
             <script>window.parent.location.href = "{logout_url}";</script>
         """, height=0)
@@ -275,9 +290,3 @@ else:
                 s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
                 s.commit()
             st.rerun()
-
-
-
-
-
-

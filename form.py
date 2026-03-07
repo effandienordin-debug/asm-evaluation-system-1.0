@@ -98,17 +98,20 @@ def check_auth():
         st.info("Log in with your @akademisains.gov.my or registered corporate email.")
         auth_url = get_auth_url()
         
-        # JAVASCRIPT REDIRECT WITH LOADING SPINNER
+        # NEW TAB REDIRECT + SELF-DESTRUCT UI
         login_html = f"""
-            <div id="login-container" style="display: flex; justify-content: center; flex-direction: column; align-items: center;">
-                <button id="sso-button" onclick="startLogin()" style="
+            <div id="login-container" style="display: flex; justify-content: center; flex-direction: column; align-items: center; text-align: center;">
+                <button id="sso-button" onclick="openLogin()" style="
                     width: 100%; background-color: #1E3A8A; color: white; padding: 14px;
                     border: none; border-radius: 8px; cursor: pointer; font-weight: bold;
                     font-size: 16px; display: flex; align-items: center; justify-content: center;
                 ">
-                    <span id="btn-text">🚀 Sign in with Microsoft</span>
+                    <span id="btn-text">🚀 Open Login in New Tab</span>
                 </button>
-                <div id="loader" style="display: none; margin-top: 10px; border: 4px solid #f3f3f3; border-top: 4px solid #1E3A8A; border-radius: 50%; width: 30px; height: 30px; animation: spin 2s linear infinite;"></div>
+                <div id="loader" style="display: none; margin-top: 15px; border: 4px solid #f3f3f3; border-top: 4px solid #1E3A8A; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite;"></div>
+                <div id="close-msg" style="display: none; margin-top: 15px; color: #d9534f; font-weight: bold;">
+                    ⚠️ Login opened in a new tab.<br>You may now close this tab safely.
+                </div>
             </div>
 
             <style>
@@ -116,23 +119,22 @@ def check_auth():
             </style>
 
             <script>
-                function startLogin() {{
+                function openLogin() {{
                     const btn = document.getElementById('sso-button');
                     const loader = document.getElementById('loader');
-                    const btnText = document.getElementById('btn-text');
+                    const msg = document.getElementById('close-msg');
                     
-                    btn.style.backgroundColor = '#cccccc';
-                    btn.disabled = true;
-                    btnText.innerHTML = 'Redirecting to Microsoft...';
+                    // Open the auth URL in a new window/tab
+                    window.open("{auth_url}", "_blank");
+                    
+                    // Update UI to show it has been moved
+                    btn.style.display = 'none';
                     loader.style.display = 'block';
-                    
-                    setTimeout(() => {{
-                        window.parent.location.href = "{auth_url}";
-                    }}, 500);
+                    msg.style.display = 'block';
                 }}
             </script>
         """
-        st.components.v1.html(login_html, height=120)
+        st.components.v1.html(login_html, height=180)
 
     with tab2:
         with st.form("local_login"):
@@ -192,8 +194,9 @@ with col_txt:
     
     if st.button("🚪 Sign Out"):
         st.session_state.clear()
+        # Use location.replace to prevent the "freeze" and clear browser history of the app
         st.components.v1.html(f"""
-            <script>window.parent.location.href = "{logout_url}";</script>
+            <script>window.top.location.replace("{logout_url}");</script>
         """, height=0)
         st.stop()
 

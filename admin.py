@@ -65,7 +65,7 @@ def bulk_add_evaluators_dialog():
     Use **SSO** for staff or **EXT** for external (manual login).
     """)
 
-    # --- NEW: DOWNLOAD CSV TEMPLATE ---
+    # --- DOWNLOAD CSV TEMPLATE ---
     template_csv = "Type,Full Name,Nickname,Email\nSSO,John Doe,John,john@akademisains.gov.my\nEXT,Jane Smith,Jane,jane@gmail.com"
     st.download_button(
         label="📥 Download CSV Template",
@@ -75,7 +75,6 @@ def bulk_add_evaluators_dialog():
         help="Download this to see the required format for bulk uploads."
     )
     st.divider()
-    # ----------------------------------
     
     raw_data = st.text_area(
         "List of Evaluators", 
@@ -316,14 +315,13 @@ if menu_choice == "📊 Tracker":
             st.warning("Archiving will move all current scores to history and reset the tracker.")
             if st.button("🗄️ Force Archive & Reset Session", type="primary"):
                 try:
-                   with conn.session as s:
-    # 1. Archive active scores 
-    # NOTE: Ensure the column names below match your 'scores' table EXACTLY
-    s.execute(text("""
-        INSERT INTO scores_history (evaluator, proposal_title, total_score, archive_timestamp)
-        SELECT evaluator, proposal_title, total_score, CURRENT_TIMESTAMP 
-        FROM scores;
-    """))
+                    with conn.session as s:
+                        # 1. Archive active scores (FIXED INDENTATION)
+                        s.execute(text("""
+                            INSERT INTO scores_history (evaluator, proposal_title, total_score, archive_timestamp)
+                            SELECT evaluator, proposal_title, total_score, CURRENT_TIMESTAMP 
+                            FROM scores;
+                        """))
                         # 2. Clear current session
                         s.execute(text("TRUNCATE TABLE scores;"))
                         s.execute(text("UPDATE evaluators SET has_submitted = FALSE;"))
@@ -421,14 +419,11 @@ elif menu_choice == "🔑 User Management":
 
 elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
-    
-    # Fetch data from the new history table
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     
     if not df_hist.empty:
-        # --- NEW: DOWNLOAD CSV BUTTON ---
+        # DOWNLOAD CSV BUTTON 
         csv_history = df_hist.to_csv(index=False).encode('utf-8')
-        
         col_dl, _ = st.columns([1, 3])
         with col_dl:
             st.download_button(
@@ -438,10 +433,6 @@ elif menu_choice == "📜 History":
                 mime="text/csv",
                 use_container_width=True
             )
-        # --------------------------------
-        
         st.dataframe(df_hist, use_container_width=True)
     else:
         st.info("ℹ️ No archived data found in history.")
-
-

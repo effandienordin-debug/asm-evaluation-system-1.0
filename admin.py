@@ -64,6 +64,18 @@ def bulk_add_evaluators_dialog():
     **Format:** `Type, Full Name, Nickname, Email`  
     Use **SSO** for staff or **EXT** for external (manual login).
     """)
+
+    # --- NEW: DOWNLOAD CSV TEMPLATE ---
+    template_csv = "Type,Full Name,Nickname,Email\nSSO,John Doe,John,john@akademisains.gov.my\nEXT,Jane Smith,Jane,jane@gmail.com"
+    st.download_button(
+        label="📥 Download CSV Template",
+        data=template_csv,
+        file_name="evaluator_bulk_template.csv",
+        mime="text/csv",
+        help="Download this to see the required format for bulk uploads."
+    )
+    st.divider()
+    # ----------------------------------
     
     raw_data = st.text_area(
         "List of Evaluators", 
@@ -407,5 +419,26 @@ elif menu_choice == "🔑 User Management":
 
 elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
+    
+    # Fetch data from the new history table
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
-    st.dataframe(df_hist, use_container_width=True)
+    
+    if not df_hist.empty:
+        # --- NEW: DOWNLOAD CSV BUTTON ---
+        csv_history = df_hist.to_csv(index=False).encode('utf-8')
+        
+        col_dl, _ = st.columns([1, 3])
+        with col_dl:
+            st.download_button(
+                label="📥 Download History (CSV)",
+                data=csv_history,
+                file_name=f"asm_history_export_{cache_buster}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        # --------------------------------
+        
+        st.dataframe(df_hist, use_container_width=True)
+    else:
+        st.info("ℹ️ No archived data found in history.")
+

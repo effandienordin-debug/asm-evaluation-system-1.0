@@ -59,16 +59,25 @@ def check_auth():
     if st.session_state["authenticated"]:
         return True
 
-    # 1. Background Check: Is there an SSO redirect code in the URL?
     ms_email = handle_sso_callback()
     if ms_email:
-        user_data = conn.query("SELECT name FROM evaluators WHERE LOWER(sso_email) = :e LIMIT 1", params={"e": ms_email}, ttl=0)
+        # DEBUG: Let's see what Microsoft actually sent
+        # st.write(f"Searching for: '{ms_email}'") 
+        
+        user_data = conn.query(
+            "SELECT name FROM evaluators WHERE LOWER(TRIM(sso_email)) = LOWER(:e) LIMIT 1", 
+            params={"e": ms_email.strip()}, 
+            ttl=0
+        )
+        
         if not user_data.empty:
             st.session_state["authenticated"] = True
             st.session_state["current_user"] = user_data.iloc[0]['name']
             st.rerun()
         else:
-            st.error(f"Access Denied: {ms_email} is not registered.")
+            st.error(f"❌ Access Denied: {ms_email} is not registered in the system.")
+            st.info("💡 Tip: Check if the email in the database matches exactly (no extra spaces).")
+            st.stop()
 
     # 2. UI: Login Screen
     st.title("🛡️ ASM Evaluator Portal")
@@ -239,3 +248,4 @@ else:
                 s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
                 s.commit()
             st.rerun()
+

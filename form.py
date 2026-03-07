@@ -61,7 +61,6 @@ def check_auth():
 
     ms_email = handle_sso_callback()
     if ms_email:
-        # Robust check with TRIM and LOWER to prevent "Access Denied" loops
         user_data = conn.query(
             "SELECT name FROM evaluators WHERE LOWER(TRIM(sso_email)) = LOWER(:e) LIMIT 1", 
             params={"e": ms_email.strip()}, 
@@ -74,54 +73,30 @@ def check_auth():
             st.rerun()
         else:
             st.error(f"❌ Access Denied: {ms_email} is not registered.")
-            st.info("Please ensure your email is correctly entered in the system database.")
             st.stop()
 
     st.title("🛡️ ASM Evaluator Portal")
     tab1, tab2 = st.tabs(["Microsoft SSO", "Local Login"])
     
     with tab1:
-    st.info("Sign in using your corporate account (Same Window).")
-    
-    try:
+        st.info("Sign in using your corporate account (Same Window).")
         auth_url = get_auth_url()
-        
-        # We use a mix of <a> for navigation and <button> for styling
+        # Ensure these lines below are indented 4 spaces further than 'with tab1:'
         login_html = f"""
             <div style="display: flex; justify-content: center;">
                 <a href="{auth_url}" target="_parent" style="text-decoration: none; width: 100%;">
                     <button style="
-                        width: 100%; 
-                        background-color: #1E3A8A; 
-                        color: white; 
-                        padding: 14px;
-                        border: none; 
-                        border-radius: 8px; 
-                        cursor: pointer; 
-                        font-weight: bold;
-                        font-size: 16px;
-                        transition: 0.3s;
-                    " onmouseover="this.style.backgroundColor='#172554'" 
-                       onmouseout="this.style.backgroundColor='#1E3A8A'">
-                        🚀 Sign in with Microsoft
-                    </button>
+                        width: 100%; background-color: #1E3A8A; color: white; padding: 14px;
+                        border: none; border-radius: 8px; cursor: pointer; font-weight: bold;
+                    ">🚀 Sign in with Microsoft</button>
                 </a>
             </div>
-            <script>
-                // Force parent redirect if the <a> tag target="_parent" is ignored
-                document.querySelector('button').onclick = function(e) {{
-                    window.parent.location.href = "{auth_url}";
-                }};
-            </script>
         """
         st.components.v1.html(login_html, height=80)
-        
-    except Exception as e:
-        st.error("Authentication Error: Could not generate Login URL.")
-        st.caption(f"Error details: {str(e)}")
 
     with tab2:
         with st.form("local_login"):
+            # Ensure these lines are indented under 'with st.form'
             u_name = st.text_input("Evaluator Name")
             u_pass = st.text_input("Password", type="password")
             if st.form_submit_button("Login", use_container_width=True):
@@ -277,4 +252,5 @@ else:
                 s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
                 s.commit()
             st.rerun()
+
 

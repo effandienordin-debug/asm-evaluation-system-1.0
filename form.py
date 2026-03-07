@@ -68,52 +68,73 @@ def handle_sso_callback():
 
 # --- 3. THE LOGIN GATEKEEPER ---
 def check_auth():
-    if st.session_state["authenticated"]:
+    # 1. Check if already logged in
+    if st.session_state.get("authenticated"):
         return True
 
-    ms_email = handle_sso_callback()
-    if ms_email:
-        user_data = conn.query(
-            "SELECT name FROM evaluators WHERE LOWER(TRIM(sso_email)) = :e LIMIT 1", 
-            params={"e": ms_email}, 
-            ttl=0
-        )
-        if not user_data.empty:
-            st.session_state["authenticated"] = True
-            st.session_state["current_user"] = user_data.iloc[0]['name']
-            st.rerun()
-        else:
-            st.error(f"❌ Access Denied: {ms_email} is not in the system.")
-            st.stop()
-
-    st.title("🛡️ ASM Evaluator Portal")
+    # 2. Check the URL for the 'code' from Microsoft
+    # We use st.query_params.to_dict() to ensure we get a fresh copy of the URL
+    params = st.query_params.to_dict()
     
-    tab1, tab2 = st.tabs(["Microsoft SSO", "Local Login"])
-    
-    with tab1:
-        # FAILSAFE: Using st.link_button. It is a native Streamlit component 
-        # that bypasses iframe JS restrictions entirely.
-        auth_url = get_auth_url()
-        if auth_url:
-            st.link_button("🚀 Sign in with Microsoft", auth_url, use_container_width=True, type="primary")
-            st.caption("Clicking this will take you to the secure Microsoft login page.")
-        else:
-            st.error("Could not generate Login URL. Verify your Azure Secrets.")
-
-    with tab2:
-        with st.form("local_login"):
-            u_name = st.text_input("Evaluator Name")
-            u_pass = st.text_input("Password", type="password")
-            if st.form_submit_button("Login", use_container_width=True):
-                res = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
-                db_pass = res.iloc[0]['value'] if not res.empty else None
-                eval_check = conn.query("SELECT name FROM evaluators WHERE name = :n LIMIT 1", params={"n": u_name}, ttl=0)
-                if not eval_check.empty and u_pass == db_pass:
-                    st.session_state["authenticated"] = True
-                    st.session_state["current_user"] = u_name
+    if "code" in params:
+        # If we see a code, STOP showing the login button and process it
+        with st.status("Verifying with Microsoft...", expanded=True) as status:
+            try:
+                app = get_msal_app()
+                # Use the auth_flow we saved before the redirect
+                flow = st.session_state.get("auth_flow")
+                
+                if not flow:
+                    st.error("Session expired. Please click login again.")
+                    time.sleep(2)
+                    st.query_params.clear()
                     st.rerun()
+
+                result = app.acquire_token_by_auth_code_flow(flow, params)
+                
+                if "id_token_claims" in result:
+                    email = result["id_token_claims"].get("preferred_username").lower().strip()
+                    
+                    # Verify user in your Database
+                    user_match = conn.query(
+                        "SELECT name FROM evaluators WHERE LOWER(sso_email) = :e LIMIT 1", 
+                        params={"e": email}, 
+                        ttl=0
+                    )
+                    
+                    if not user_match.empty:
+                        status.update(label="✅ Access Granted!", state="complete")
+                        st.session_state["authenticated"] = True
+                        st.session_state["current_user"] = user_match.iloc[0]['name']
+                        # IMPORTANT: Clear params so we don't try to reuse the same code
+                        st.query_params.clear() 
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {email} is not authorized in this system.")
+                        st.stop()
                 else:
-                    st.error("Invalid credentials.")
+                    st.error(f"Microsoft Error: {result.get('error_description')}")
+                    st.stop()
+            except Exception as e:
+                st.error(f"Authentication Failed: {e}")
+                st.stop()
+
+    # 3. If no code and not authenticated, show the Login Page
+    st.title("🛡️ ASM Evaluator Portal")
+    auth_url = get_auth_url()
+    
+    # Use the 'Emergency' HTML button with target="_top"
+    st.markdown(
+        f"""
+        <a href="{auth_url}" target="_top" style="
+            text-decoration: none; display: block; width: 100%; 
+            background-color: #1E3A8A; color: white; padding: 20px; 
+            text-align: center; border-radius: 10px; font-weight: bold; 
+            font-size: 20px; margin-top: 20px;
+        ">🚀 SIGN IN WITH MICROSOFT</a>
+        """,
+        unsafe_allow_html=True
+    )
     st.stop()
 
 # --- 4. APP LOGIC ---
@@ -234,3 +255,4 @@ else:
         with st.expander(f"⏳ Remaining ({len(rem)})"):
             for p in rem:
                 st.button(f"📝 Start: {p}", key=f"btn_{p}", use_container_width=True, on_click=nav_to_proposal, args=(p,))
+

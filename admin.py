@@ -358,16 +358,15 @@ elif menu_choice == "👤 Evaluators & Links":
     if st.session_state["user_role"] != "Viewer":
         col_bulk, _ = st.columns([1, 4])
         with col_bulk:
-            if st.button("📚 Bulk Add Evaluators"): bulk_add_evaluators_dialog()
-       
-                        except Exception as e:
-                            st.error(f"Database Error: {e}")
-    with st.expander("➕ Add Single Evaluator"):
+            if st.button("📚 Bulk Add Evaluators"): 
+                bulk_add_evaluators_dialog()
+        
+        with st.expander("➕ Add Single Evaluator"):
             etype = st.radio("Type", ["ASM Staff (SSO)", "External (Manual)"], horizontal=True)
             with st.form("eval_form", clear_on_submit=True):
                 col1, col2 = st.columns(2)
-                e_name = col1.text_input("Full Name*")
-                e_nick = col1.text_input("Nickname*")
+                e_name = col1.text_input("Full Name*").strip()
+                e_nick = col1.text_input("Nickname*").strip()
                 
                 if etype == "ASM Staff (SSO)":
                     e_sso = col2.text_input("Microsoft Email*", placeholder="user@akademisains.gov.my")
@@ -380,26 +379,62 @@ elif menu_choice == "👤 Evaluators & Links":
                 
                 e_file = st.file_uploader("Photo", type=['png', 'jpg'])
                 
-                # --- LINE 377 SHOULD BE ALIGNED WITH 'e_file' ABOVE ---
                 if st.form_submit_button("Save"):
-                    if not e_name.strip():
+                    if not e_name:
                         st.error("🚨 Name is required!")
                     else:
-                        with conn.session as s:
-                            s.execute(text("""
-                                INSERT INTO evaluators (name, nickname, email, sso_email, password, has_submitted) 
-                                VALUES (:n, :nk, :em, :sso, :pw, FALSE)
-                                ON CONFLICT (name) DO NOTHING;
-                            """), {"n": e_name.strip(), "nk": e_nick.strip(), "em": e_mail.strip(), "sso": e_sso, "pw": e_pass})
-                            s.commit()
-                        
-                        if e_file:
-                            file_path = f"{e_name.strip().replace(' ', '_')}.png"
-                            supabase.storage.from_(BUCKET_NAME).upload(path=file_path, file=e_file.getvalue(), file_options={"x-upsert": "true"})
-                        
-                        st.success("✅ Added!")
-                        time.sleep(1)
-                        st.rerun()
+                        try:
+                            with conn.session as s:
+                                s.execute(text("""
+                                    INSERT INTO evaluators (name, nickname, email, sso_email, password, has_submitted) 
+                                    VALUES (:n, :nk, :em, :sso, :pw, FALSE)
+                                    ON CONFLICT (name) DO NOTHING;
+                                """), {"n": e_name, "nk": e_nick, "em": e_mail, "sso": e_sso, "pw": e_pass})
+                                s.commit()
+                            
+                            if e_file:
+                                file_path = f"{e_name.replace(' ', '_')}.png"
+                                supabase.storage.from_(BUCKET_NAME).upload(
+                                    path=file_path, 
+                                    file=e_file.getvalue(), 
+                                    file_options={"x-upsert": "true"}
+                                )
+                            
+                            st.success(f"✅ {e_name} Added!")
+                            time.sleep(1)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Database Error: {e}")
+
+    st.divider()
+    status_df = conn.query("SELECT * FROM evaluators ORDER BY name ASC;", ttl=0)
+    for _, row in status_df.iterrows():
+        e = row['name']
+        nick = row['nickname']
+        pers_email = row.get('email', '')
+        sso_val = row.get('sso_email')
+        
+        c1, c2, c3, c4, c5, c6, c7 = st.columns([0.5, 2.5, 1.5, 0.6, 0.6, 0.6, 0.6])
+        img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
+        
+        c1.markdown(f'<img src="{img_url}" style="width:40px; height:40px; border-radius:50%;" onerror="this.src=\'https://ui-avatars.com/api/?name={e}\'">', unsafe_allow_html=True)
+        
+        with c2:
+            st.write(f"**{nick}**")
+            st.caption(f"📧 {pers_email} | SSO: {sso_val if sso_val else 'None'}")
+        
+        c3.write(f"`{row.get('password')}`")
+        
+        if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
+            if c4.button("✏️", key=f"e_{e}"): 
+                edit_evaluator_dialog(e, nick, pers_email, row.get('password'))
+            if c6.button("🔄", key=f"r_{e}"):
+                with conn.session as s:
+                    s.execute(text("UPDATE evaluators SET has_submitted = FALSE WHERE name = :n"), {"n": e})
+                    s.commit()
+                st.rerun()
+            if c7.button("🗑️", key=f"d_{e}"): 
+                confirm_delete_dialog("evaluators", "name", e)
     st.divider()
     status_df = conn.query("SELECT * FROM evaluators ORDER BY name ASC;", ttl=0)
     for _, row in status_df.iterrows():
@@ -452,5 +487,6 @@ elif menu_choice == "📜 History":
         st.dataframe(df_hist, use_container_width=True)
     else:
         st.info("ℹ️ No archived data found in history.")
+
 
 

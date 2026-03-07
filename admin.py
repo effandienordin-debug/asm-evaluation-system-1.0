@@ -359,12 +359,16 @@ elif menu_choice == "👤 Evaluators & Links":
         col_bulk, _ = st.columns([1, 4])
         with col_bulk:
             if st.button("📚 Bulk Add Evaluators"): bulk_add_evaluators_dialog()
-        with st.expander("➕ Add Single Evaluator"):
+       
+                        except Exception as e:
+                            st.error(f"Database Error: {e}")
+    with st.expander("➕ Add Single Evaluator"):
             etype = st.radio("Type", ["ASM Staff (SSO)", "External (Manual)"], horizontal=True)
             with st.form("eval_form", clear_on_submit=True):
                 col1, col2 = st.columns(2)
                 e_name = col1.text_input("Full Name*")
                 e_nick = col1.text_input("Nickname*")
+                
                 if etype == "ASM Staff (SSO)":
                     e_sso = col2.text_input("Microsoft Email*", placeholder="user@akademisains.gov.my")
                     e_mail = col2.text_input("Alt Email")
@@ -373,28 +377,29 @@ elif menu_choice == "👤 Evaluators & Links":
                     e_sso = None
                     e_mail = col2.text_input("Email*")
                     e_pass = col2.text_input("Password*")
+                
                 e_file = st.file_uploader("Photo", type=['png', 'jpg'])
-               if st.form_submit_button("Save"):
+                
+                # --- LINE 377 SHOULD BE ALIGNED WITH 'e_file' ABOVE ---
+                if st.form_submit_button("Save"):
                     if not e_name.strip():
-                        st.error("🚨 Name cannot be empty!")
+                        st.error("🚨 Name is required!")
                     else:
-                        try:
-                            with conn.session as s:
-                                s.execute(text("""
-                                    INSERT INTO evaluators (name, nickname, email, sso_email, password, has_submitted) 
-                                    VALUES (:n, :nk, :em, :sso, :pw, FALSE)
-                                    ON CONFLICT (name) DO NOTHING;
-                                """), {"n": e_name.strip(), "nk": e_nick.strip(), "em": e_mail.strip(), "sso": e_sso, "pw": e_pass})
-                                s.commit()
-                            
-                            if e_file:
-                                file_path = f"{e_name.strip().replace(' ', '_')}.png"
-                                supabase.storage.from_(BUCKET_NAME).upload(path=file_path, file=e_file.getvalue(), file_options={"x-upsert": "true"})
-                            
-                            st.success("✅ Added!"); time.sleep(1); st.rerun()
-                        except Exception as e:
-                            st.error(f"Database Error: {e}")
-
+                        with conn.session as s:
+                            s.execute(text("""
+                                INSERT INTO evaluators (name, nickname, email, sso_email, password, has_submitted) 
+                                VALUES (:n, :nk, :em, :sso, :pw, FALSE)
+                                ON CONFLICT (name) DO NOTHING;
+                            """), {"n": e_name.strip(), "nk": e_nick.strip(), "em": e_mail.strip(), "sso": e_sso, "pw": e_pass})
+                            s.commit()
+                        
+                        if e_file:
+                            file_path = f"{e_name.strip().replace(' ', '_')}.png"
+                            supabase.storage.from_(BUCKET_NAME).upload(path=file_path, file=e_file.getvalue(), file_options={"x-upsert": "true"})
+                        
+                        st.success("✅ Added!")
+                        time.sleep(1)
+                        st.rerun()
     st.divider()
     status_df = conn.query("SELECT * FROM evaluators ORDER BY name ASC;", ttl=0)
     for _, row in status_df.iterrows():
@@ -447,4 +452,5 @@ elif menu_choice == "📜 History":
         st.dataframe(df_hist, use_container_width=True)
     else:
         st.info("ℹ️ No archived data found in history.")
+
 

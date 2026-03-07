@@ -65,12 +65,18 @@ def handle_sso_callback():
 
 # --- 3. THE LOGIN GATEKEEPER ---
 def check_auth():
-    if st.session_state.get("authenticated"):
+    if st.session_state["authenticated"]:
         return True
 
-    # Check for returning SSO user BEFORE showing the UI
+    # Check if we are returning from a failed login attempt
+    if "login_error" in st.session_state:
+        st.error(st.session_state["login_error"])
+        if st.button("🔄 Try Again"):
+            del st.session_state["login_error"]
+            st.rerun()
+        st.stop()
+
     ms_email = handle_sso_callback()
-    
     if ms_email:
         user_data = conn.query(
             "SELECT name FROM evaluators WHERE LOWER(TRIM(sso_email)) = LOWER(:e) LIMIT 1", 
@@ -81,37 +87,32 @@ def check_auth():
         if not user_data.empty:
             st.session_state["authenticated"] = True
             st.session_state["current_user"] = user_data.iloc[0]['name']
-            if "login_error" in st.session_state:
-                del st.session_state["login_error"]
             st.rerun()
         else:
-            # THIS IS THE PART THAT WAS FAILING IN THE SAME WINDOW
-            st.session_state["login_error"] = f"🚫 Access Denied: {ms_email} is not registered."
+            # Store error in session state so it survives the rerun/redirect
+            st.session_state["login_error"] = f"❌ Access Denied: {ms_email} is not registered in the ASM database."
             st.rerun()
 
-    # --- UI RENDERING ---
     st.title("🛡️ ASM Evaluator Portal")
     
-    # Show error if one exists in state
-    if "login_error" in st.session_state:
-        st.error(st.session_state["login_error"])
-        if st.button("🔄 Clear Error & Try Again"):
-            del st.session_state["login_error"]
-            st.rerun()
-
+    # Information Alert
+    st.warning("🔒 This system is restricted to authorized ASM Evaluators only.")
+    
     tab1, tab2 = st.tabs(["Microsoft SSO", "Local Login"])
     
     with tab1:
-        st.info("Sign in with your corporate email (Same Window).")
+        st.info("Log in with your @akademisains.gov.my or registered corporate email.")
         auth_url = get_auth_url()
-        # Using window.top.location for absolute window control
+        
         login_html = f"""
             <div style="display: flex; justify-content: center;">
-                <button onclick="window.top.location.href='{auth_url}'" style="
-                    width: 100%; background-color: #1E3A8A; color: white; padding: 14px;
-                    border: none; border-radius: 8px; cursor: pointer; font-weight: bold;
-                    font-size: 16px;
-                ">🚀 Sign in with Microsoft</button>
+                <a href="{auth_url}" target="_top" style="text-decoration: none; width: 100%;">
+                    <button style="
+                        width: 100%; background-color: #1E3A8A; color: white; padding: 14px;
+                        border: none; border-radius: 8px; cursor: pointer; font-weight: bold;
+                        font-size: 16px;
+                    ">🚀 Sign in with Microsoft</button>
+                </a>
             </div>
         """
         st.components.v1.html(login_html, height=80)
@@ -124,13 +125,16 @@ def check_auth():
                 res = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
                 db_pass = res.iloc[0]['value'] if not res.empty else None
                 eval_check = conn.query("SELECT name FROM evaluators WHERE name = :n LIMIT 1", params={"n": u_name}, ttl=0)
+                
                 if not eval_check.empty and u_pass == db_pass:
                     st.session_state["authenticated"] = True
                     st.session_state["current_user"] = u_name
                     st.rerun()
                 else:
-                    st.error("Invalid name or password.")
+                    st.error("Invalid name or password. Please try again.")
+    
     st.stop()
+
 # --- 4. APP LOGIC ---
 check_auth()
 current_user = st.session_state["current_user"]
@@ -271,6 +275,7 @@ else:
                 s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
                 s.commit()
             st.rerun()
+
 
 
 

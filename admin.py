@@ -92,17 +92,6 @@ except Exception as e:
 # [Insert all your @st.dialog functions here - bulk_add, edit_evaluator, etc.]
 
 # --- 5. SIDEBAR NAVIGATION ---
-This specific KeyError: 'url_pathname' is a common headache in Streamlit version 1.30.0 and above. It happens because Streamlit’s internal "Page Registry" fails to map the current running script (admin.py) to its own URL.
-
-Essentially, the app is trying to look itself up in a dictionary and finding nothing.
-
-🛠️ The "Bulletproof" Fix
-Instead of hardcoding the filename, we can use a "Self-Referencing" approach. Streamlit usually allows the main entry point to be linked via the string "admin.py", but when that fails, we use the specific file path logic.
-
-Replace your st.page_link block with this:
-
-Python
-# --- 5. SIDEBAR NAVIGATION ---
 with st.sidebar:
     st.title("🛡️ ASM Admin")
     
@@ -339,6 +328,7 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 
 

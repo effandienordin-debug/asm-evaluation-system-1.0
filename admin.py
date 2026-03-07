@@ -15,8 +15,6 @@ cookie_manager = stx.CookieManager(key="main_cookie_manager")
 
 # --- 1. CONFIG & CONNECTIONS ---
 st.set_page_config(page_title="ASM Admin Panel", layout="wide")
-
-# Cache buster for images
 cache_buster = datetime.now().strftime("%Y%m%d%H%M%S")
 
 # Initialize Session States
@@ -33,24 +31,36 @@ def load_secret(key):
     st.error(f"❌ Missing Secret: **{key}**")
     st.stop()
 
-# Azure SSO Config
+# Azure & DB Config
 CLIENT_ID = load_secret("azure_client_id")
 CLIENT_SECRET = load_secret("azure_client_secret")
 TENANT_ID = load_secret("azure_tenant_id")
-REDIRECT_URI = load_secret("azure_redirect_uri")
-AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
-SCOPE = ["User.Read"]
-
 SUPABASE_URL = load_secret("supabase_url")
 SUPABASE_KEY = load_secret("supabase_key")
 BUCKET_NAME = "evaluator-photos"
 conn = st.connection("postgresql", type="sql")
 
-# --- 2. LOGIN LOGIC ---
+# --- 2. HELPER FUNCTIONS (CRITICAL FIX: Added missing functions) ---
+def get_items_sql(table, column):
+    try:
+        df = conn.query(f"SELECT {column} FROM {table} ORDER BY {column} ASC;", ttl=0)
+        return df[column].dropna().tolist() if not df.empty else []
+    except Exception as e:
+        st.error(f"DB Error (get_items): {e}")
+        return []
+
+def add_item_sql(table, column, value):
+    try:
+        with conn.session as s:
+            s.execute(text(f"INSERT INTO {table} ({column}) VALUES (:val) ON CONFLICT DO NOTHING;"), {"val": value.strip()})
+            s.commit()
+    except Exception as e:
+        st.error(f"DB Error (add_item): {e}")
+
+# --- 3. LOGIN LOGIC ---
 def check_password():
     if st.session_state.get("authenticated"):
         return True
-
     saved_user = cookie_manager.get(cookie="asm_admin_user")
     if saved_user:
         user_check = conn.query("SELECT username, role FROM users WHERE username = :u", params={"u": saved_user}, ttl=0)
@@ -59,20 +69,17 @@ def check_password():
             st.session_state["username"] = user_check.iloc[0]['username']
             st.session_state["user_role"] = user_check.iloc[0]['role']
             return True
-
-    # Simple Login Form
+    
     st.markdown("<h1 style='text-align: center;'>🛡️ ASM Admin Access</h1>", unsafe_allow_html=True)
     _, center, _ = st.columns([1, 1.5, 1])
     with center:
         with st.form("login_form"):
-            u_input = st.text_input("Local Username").strip()
-            p_input = st.text_input("Local Password", type="password").strip()
+            u_input = st.text_input("Username").strip()
+            p_input = st.text_input("Password", type="password").strip()
             if st.form_submit_button("Sign In", use_container_width=True):
                 user_data = conn.query("SELECT username, password_hash, role FROM users WHERE LOWER(username) = LOWER(:u)", params={"u": u_input}, ttl=0)
                 if not user_data.empty and str(user_data.iloc[0]['password_hash']) == p_input:
-                    st.session_state["authenticated"] = True
-                    st.session_state["username"] = user_data.iloc[0]['username']
-                    st.session_state["user_role"] = user_data.iloc[0]['role']
+                    st.session_state.update({"authenticated": True, "username": user_data.iloc[0]['username'], "user_role": user_data.iloc[0]['role']})
                     cookie_manager.set("asm_admin_user", user_data.iloc[0]['username'])
                     st.rerun()
                 else:
@@ -82,69 +89,46 @@ def check_password():
 if not check_password():
     st.stop()
 
-# --- 3. INITIALIZE CLIENTS ---
+# --- 4. INITIALIZE SUPABASE ---
 try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
     st.error(f"Supabase Connection Error: {e}")
 
-# --- 4. DIALOGS (Keep your existing @st.dialog functions here) ---
-# [Insert all your @st.dialog functions here - bulk_add, edit_evaluator, etc.]
-
 # --- 5. SIDEBAR NAVIGATION ---
 with st.sidebar:
     st.title("🛡️ ASM Admin")
-    
     st.subheader("📍 Navigation")
     
-    # SOLUTION: Use the relative path "./admin.py" 
-    # This usually resolves the 'url_pathname' KeyError on Streamlit Cloud
+    # Path handling to prevent url_pathname KeyError
     try:
         st.page_link("admin.py", label="Home Dashboard", icon="🏠")
-    except KeyError:
-        # Fallback: If it still crashes, use a simple button or info text
-        if st.button("🏠 Return Home", use_container_width=True):
-            st.switch_page("admin.py")
-
-    # For the reports page, ensure the filename is EXACTLY what is on GitHub
+    except:
+        if st.button("🏠 Home"): st.switch_page("admin.py")
+        
     try:
         st.page_link("pages/📊_reports.py", label="Detailed Reports", icon="📊")
-    except Exception as e:
-        st.error(f"Could not find Reports page: {e}")
-    
-    st.divider()
+    except:
+        st.caption("Detailed Reports (unavailable)")
 
-    # Section Navigation
+    st.divider()
     menu_options = ["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"]
     if st.session_state.get("user_role") == "SuperAdmin":
         menu_options.append("🔑 User Management")
-    
     menu_choice = st.radio("Go to Section:", menu_options)
     
     st.divider()
-
-    # Utilities
-    auto_refresh = st.toggle("🔄 Auto Refresh (15s)", value=False)
-    if auto_refresh: 
-        st_autorefresh(interval=15000, key="admin_refresh")
-
-    if st.session_state.get("user_role") in ["SuperAdmin", "Editor"]:
-        st.subheader("🚀 Session Control")
-        force_mode = st.toggle("⚠️ Enable Force Archive")
-        if st.button("🆕 Archive & Reset", type="primary", use_container_width=True, disabled=not force_mode):
-            with conn.session as s:
-                s.execute(text("INSERT INTO scores_history SELECT *, NOW() as archive_timestamp FROM scores;"))
-                s.execute(text("TRUNCATE TABLE scores RESTART IDENTITY CASCADE;"))
-                s.commit()
-            st.balloons()
-            st.rerun()
-
-    st.divider()
     if st.button("🚪 Logout", use_container_width=True):
-        cookie_manager.delete("asm_admin_user") 
-        st.session_state["authenticated"] = False
-        st.session_state["username"] = None
+        cookie_manager.delete("asm_admin_user")
+        st.session_state.clear()
         st.rerun()
+
+# --- 6. MAIN CONTENT ---
+if menu_choice == "📊 Tracker":
+    st.header("📊 Live Proposal Progress")
+    df_scores = conn.query("SELECT * FROM scores;", ttl=0)
+    props_all = get_items_sql("proposals", "title")
+    evals_df = conn.query("SELECT name, nickname FROM evaluators ORDER BY name ASC;", ttl=0)
 
 # --- 8. MAIN CONTENT AREA ---
 
@@ -328,7 +312,3 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
-
-
-
-

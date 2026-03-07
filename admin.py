@@ -288,46 +288,29 @@ def add_item_sql(table, column, value):
 
 # --- 7. SIDEBAR NAVIGATION ---
 cache_buster = int(time.time())
-
 with st.sidebar:
-
     st.title("🛡️ ASM Admin")
-
     
-
+    # Navigation Links (Must be indented 4 spaces from 'with')
+    st.page_link("admin.py", label="Home", icon="🏠")
+    st.page_link("pages/📊_reports.py", label="Detailed Reports", icon="📊")
+    
     if st.button("🚪 Logout", use_container_width=True):
-
         cookie_manager.delete("asm_admin_user") 
-
         st.session_state["authenticated"] = False
-
         st.session_state["username"] = None
-
         st.rerun()
-
     
-
     st.divider()
-
     auto_refresh = st.toggle("🔄 Auto Refresh (15s)", value=False)
-
     if auto_refresh: 
-
         st_autorefresh(interval=15000, key="admin_refresh")
-
     
-
     menu_options = ["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"]
-
     if st.session_state.get("user_role") == "SuperAdmin":
-
         menu_options.append("🔑 User Management")
-
     
-
     menu_choice = st.radio("Navigate to:", menu_options)
-
-    
 
     if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
 
@@ -548,6 +531,7 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 
 

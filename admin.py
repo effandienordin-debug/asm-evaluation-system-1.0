@@ -57,7 +57,7 @@ def add_item_sql(table, column, value):
     except Exception as e:
         st.error(f"DB Error (add_item): {e}")
 
-# --- 2.5 DIALOGS (RESTORING MISSING FEATURES) ---
+# --- 2.5 DIALOGS ---
 @st.dialog("📚 Bulk Add Evaluators")
 def bulk_add_evaluators_dialog():
     st.write("Format: **Full Name, Nickname, SSO Email** (one per line)")
@@ -80,7 +80,7 @@ def bulk_add_evaluators_dialog():
             s.commit()
         st.success(f"✅ Successfully imported {count} staff evaluators!")
         time.sleep(1); st.rerun()
-        
+
 @st.dialog("📚 Bulk Add Proposals")
 def bulk_add_proposals_dialog():
     st.write("Paste titles below. Separate by **new lines** or **commas**.")
@@ -95,8 +95,7 @@ def bulk_add_proposals_dialog():
                     s.execute(text("INSERT INTO proposals (title) VALUES (:val) ON CONFLICT DO NOTHING;"), {"val": title})
                 s.commit()
             st.success(f"✅ Added {len(items)} proposals!")
-            time.sleep(1)
-            st.rerun()
+            time.sleep(1); st.rerun()
 
 @st.dialog("✏️ Edit Proposal")
 def edit_proposal_dialog(old_val):
@@ -125,35 +124,21 @@ def edit_evaluator_dialog(name, nick, email, pwd):
     new_pwd = st.text_input("Password", value=pwd)
     eval_data = conn.query("SELECT sso_email FROM evaluators WHERE name = :n", params={"n": name}, ttl=0)
     current_sso = eval_data.iloc[0]['sso_email'] if not eval_data.empty else ""
-    
-    new_sso = st.text_input("Microsoft/SSO Email (for Login)", value=current_sso if current_sso else "")
-    # Restoring the photo edit feature
+    new_sso = st.text_input("Microsoft/SSO Email", value=current_sso if current_sso else "")
     new_file = st.file_uploader("Update Photo (Optional)", type=['png', 'jpg'])
     
     if st.button("Save Changes", type="primary"):
         with conn.session as s:
             s.execute(text("""
                 UPDATE evaluators 
-                SET nickname = :nk, email = :em, password = :pw 
+                SET nickname = :nk, email = :em, password = :pw, sso_email = :sso
                 WHERE name = :n
-            """), {"nk": new_nick, "em": new_email, "pw": new_pwd, "n": name})
+            """), {"nk": new_nick, "em": new_email, "pw": new_pwd, "sso": new_sso, "n": name})
             s.commit()
-        
-        # If a new file is uploaded, overwrite the old one in Supabase
         if new_file:
             file_path = f"{name.strip().replace(' ', '_')}.png"
-            try:
-                supabase.storage.from_(BUCKET_NAME).upload(
-                    path=file_path, 
-                    file=new_file.getvalue(), 
-                    file_options={"content-type": "image/png", "x-upsert": "true"}
-                )
-            except Exception as e:
-                st.error(f"Photo upload failed: {e}")
-        
-        st.success("Changes saved!")
-        time.sleep(1)
-        st.rerun()
+            supabase.storage.from_(BUCKET_NAME).upload(path=file_path, file=new_file.getvalue(), file_options={"x-upsert": "true"})
+        st.success("Changes saved!"); time.sleep(1); st.rerun()
 
 @st.dialog("➕ Add Admin User")
 def add_user_dialog():
@@ -161,49 +146,24 @@ def add_user_dialog():
         u = st.text_input("Username").strip()
         p = st.text_input("Password", type="password").strip()
         r = st.selectbox("Role", ["Viewer", "Editor", "SuperAdmin"])
-        
         if st.form_submit_button("Create Account"):
-            # Validation Check
-            if not u or not p:
-                st.error("🚨 **Username and Password cannot be blank!**")
+            if not u or not p: st.error("🚨 Username/Password required!")
             else:
                 try:
                     with conn.session as s:
-                        s.execute(
-                            text("INSERT INTO users (username, password_hash, role) VALUES (:u, :p, :r)"),
-                            {"u": u, "p": p, "r": r}
-                        )
+                        s.execute(text("INSERT INTO users (username, password_hash, role) VALUES (:u, :p, :r)"), {"u": u, "p": p, "r": r})
                         s.commit()
-                    st.success(f"✅ User {u} created!")
-                    time.sleep(1)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Error creating user: {e}")
-
-@st.dialog("✏️ Edit Admin User")
-def edit_user_dialog(user_id, username, role):
-    new_role = st.selectbox("Update Role", ["Viewer", "Editor", "SuperAdmin"], index=["Viewer", "Editor", "SuperAdmin"].index(role))
-    new_pass = st.text_input("Update Password (leave blank to keep current)", type="password")
-    if st.button("Save Changes"):
-        with conn.session as s:
-            if new_pass:
-                s.execute(text("UPDATE users SET role = :r, password_hash = :p WHERE id = :id"), {"r": new_role, "p": new_pass, "id": user_id})
-            else:
-                s.execute(text("UPDATE users SET role = :r WHERE id = :id"), {"r": new_role, "id": user_id})
-            s.commit()
-        st.rerun()
+                    st.success(f"✅ User {u} created!"); time.sleep(1); st.rerun()
+                except Exception as e: st.error(f"❌ Error: {e}")
 
 # --- 3. LOGIN LOGIC ---
 def check_password():
-    if st.session_state.get("authenticated"):
-        return True
+    if st.session_state.get("authenticated"): return True
     saved_user = cookie_manager.get(cookie="asm_admin_user")
     if saved_user:
         user_check = conn.query("SELECT username, role FROM users WHERE username = :u", params={"u": saved_user}, ttl=0)
         if not user_check.empty:
-            st.session_state["authenticated"] = True
-            st.session_state["username"] = user_check.iloc[0]['username']
-            st.session_state["user_role"] = user_check.iloc[0]['role']
+            st.session_state.update({"authenticated": True, "username": user_check.iloc[0]['username'], "user_role": user_check.iloc[0]['role']})
             return True
     
     st.markdown("<h1 style='text-align: center;'>🛡️ ASM Admin Access</h1>", unsafe_allow_html=True)
@@ -218,40 +178,26 @@ def check_password():
                     st.session_state.update({"authenticated": True, "username": user_data.iloc[0]['username'], "user_role": user_data.iloc[0]['role']})
                     cookie_manager.set("asm_admin_user", user_data.iloc[0]['username'])
                     st.rerun()
-                else:
-                    st.error("❌ Invalid Credentials")
+                else: st.error("❌ Invalid Credentials")
     return False
 
-if not check_password():
-    st.stop()
+if not check_password(): st.stop()
 
 # --- 4. INITIALIZE SUPABASE ---
 try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
-    st.error(f"Supabase Connection Error: {e}")
+    st.error(f"Supabase Error: {e}")
 
 # --- 5. SIDEBAR NAVIGATION ---
 with st.sidebar:
     st.title("🛡️ ASM Admin")
     st.subheader("📍 Navigation")
-    
-    try:
-        st.page_link("admin.py", label="Home Dashboard", icon="🏠")
-    except:
-        if st.button("🏠 Home"): st.switch_page("admin.py")
-        
-    try:
-        st.page_link("pages/📊_reports.py", label="Detailed Reports", icon="📊")
-    except:
-        st.caption("Detailed Reports (unavailable)")
-
+    if st.button("🏠 Home", use_container_width=True): st.switch_page("admin.py")
     st.divider()
     menu_options = ["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"]
-    if st.session_state.get("user_role") == "SuperAdmin":
-        menu_options.append("🔑 User Management")
+    if st.session_state.get("user_role") == "SuperAdmin": menu_options.append("🔑 User Management")
     menu_choice = st.radio("Go to Section:", menu_options)
-    
     st.divider()
     if st.button("🚪 Logout", use_container_width=True):
         cookie_manager.delete("asm_admin_user")
@@ -259,26 +205,23 @@ with st.sidebar:
         st.rerun()
 
 # --- 6. MAIN CONTENT ---
-elif menu_choice == "📊 Tracker":
+if menu_choice == "📊 Tracker":
     st.header("📊 Live Proposal Progress")
     df_scores = conn.query("SELECT * FROM scores;", ttl=0)
     props_all = get_items_sql("proposals", "title")
     evals_df = conn.query("SELECT name, nickname FROM evaluators ORDER BY name ASC;", ttl=0)
    
-    # Check if there is actually any data to show
     if df_scores.empty:
-        st.info("ℹ️ **No evaluations have been submitted yet.** Once evaluators start scoring, the progress bars and averages will appear here.")
+        st.info("ℹ️ **No evaluations have been submitted yet.** Once evaluators start scoring, progress will appear here.")
     else:
         numeric_cols = df_scores.select_dtypes(include=['number']).columns
         st.subheader("Current Session Averages")
         st.table(df_scores[numeric_cols].mean().round(2).rename("Global Avg"))
     
-    # Still show progress bars if evaluators exist
     if not evals_df.empty and len(props_all) > 0:
         total_props_count = len(props_all)
         total_required = total_props_count * len(evals_df)
         current_total_submissions = len(df_scores) if not df_scores.empty else 0
-
         st.divider()
         st.progress(min(current_total_submissions / total_required, 1.0) if total_required > 0 else 0)
         st.write(f"**Total System Progress:** {current_total_submissions} / {total_required} Evaluations Completed")
@@ -290,11 +233,9 @@ elif menu_choice == "📊 Tracker":
             nick = row['nickname'] if row['nickname'] else name
             done_count = len(df_scores[df_scores['evaluator'] == name]) if not df_scores.empty else 0
             is_done = (done_count >= total_props_count)
-            
             bg = "#E6FFFA" if is_done else "#FFFBEB"
             border_col = '#38B2AC' if is_done else '#ECC94B'
             img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{name.replace(' ', '_')}.png?t={cache_buster}"
-            
             with cols[i % 4]:
                 st.markdown(f"""
                     <div style="background-color:{bg}; border-top: 5px solid {border_col}; padding:15px; border-radius:8px; text-align:center; margin-bottom:10px;">
@@ -307,139 +248,90 @@ elif menu_choice == "📊 Tracker":
 elif menu_choice == "📋 Proposals":
     st.header("📋 Manage Proposals")
     if st.session_state["user_role"] != "Viewer":
-        col_a, col_b = st.columns([1, 4])
+        col_a, _ = st.columns([1, 4])
         with col_a:
-            if st.button("📚 Bulk Add"):
-                bulk_add_proposals_dialog()
-        
+            if st.button("📚 Bulk Add"): bulk_add_proposals_dialog()
         with st.expander("➕ Add Single Proposal"):
-            with st.form("add_proposal_form", clear_on_submit=True):
+            with st.form("add_p", clear_on_submit=True):
                 p_name = st.text_input("Proposal Title*")
-                if st.form_submit_button("Add Single"):
-                    if not p_name.strip():
-                        st.error("🚨 Proposal title cannot be blank!")
-                    else:
+                if st.form_submit_button("Add"):
+                    if p_name.strip():
                         add_item_sql("proposals", "title", p_name.strip())
-                        st.success("✅ Proposal added!")
-                        time.sleep(1)
-                        st.rerun()
-    
+                        st.success("✅ Added!"); time.sleep(1); st.rerun()
     st.divider()
     props = get_items_sql("proposals", "title")
-    if not props:
-        st.info("No proposals found.")
-    else:
-        for p in props:
-            c1, c2, c3 = st.columns([5, 1, 1])
-            c1.write(f"• {p}")
-            if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
-                if c2.button("✏️", key=f"edit_p_{p}"): edit_proposal_dialog(p)
-                if c3.button("🗑️", key=f"del_p_{p}"): confirm_delete_dialog("proposals", "title", p)
+    for p in props:
+        c1, c2, c3 = st.columns([5, 1, 1])
+        c1.write(f"• {p}")
+        if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
+            if c2.button("✏️", key=f"edit_p_{p}"): edit_proposal_dialog(p)
+            if c3.button("🗑️", key=f"del_p_{p}"): confirm_delete_dialog("proposals", "title", p)
 
 elif menu_choice == "👤 Evaluators & Links":
     st.header("👤 Evaluators & Access Links")
-    
     if st.session_state["user_role"] != "Viewer":
         col_bulk, _ = st.columns([1, 4])
         with col_bulk:
-            if st.button("📚 Bulk Add Evaluators"):
-                bulk_add_evaluators_dialog() # Ensure this dialog function is defined below
-
+            if st.button("📚 Bulk Add Evaluators"): bulk_add_evaluators_dialog()
         with st.expander("➕ Add Single Evaluator"):
-            etype = st.radio("Evaluator Type", ["ASM Staff (SSO)", "External (Manual Login)"], horizontal=True)
-            
+            etype = st.radio("Type", ["ASM Staff (SSO)", "External (Manual)"], horizontal=True)
             with st.form("eval_form", clear_on_submit=True):
                 col1, col2 = st.columns(2)
                 e_name = col1.text_input("Full Name*")
-                e_nick = col1.text_input("Display Nickname*")
-                
+                e_nick = col1.text_input("Nickname*")
                 if etype == "ASM Staff (SSO)":
-                    e_sso = col2.text_input("Microsoft/SSO Email*", placeholder="user@akademisains.gov.my")
-                    e_mail = col2.text_input("Alternative Contact Email (Optional)")
-                    e_pass = "SSO_USER" # Default filler for staff
+                    e_sso = col2.text_input("Microsoft Email*", placeholder="user@akademisains.gov.my")
+                    e_mail = col2.text_input("Alt Email")
+                    e_pass = "SSO_USER"
                 else:
                     e_sso = None
-                    e_mail = col2.text_input("Email Address*")
-                    e_pass = col2.text_input("Assign Password*")
-                
-                e_file = st.file_uploader("Upload Photo (Recommended)", type=['png', 'jpg'])
-                
-                if st.form_submit_button("Save Evaluator", use_container_width=True):
-                    if not e_name or not e_nick:
-                        st.error("Name and Nickname are required.")
-                    else:
-                        with conn.session as s:
-                            s.execute(text("""
-                                INSERT INTO evaluators (name, nickname, email, sso_email, password, has_submitted) 
-                                VALUES (:n, :nk, :em, :sso, :pw, FALSE)
-                            """), {"n": e_name, "nk": e_nick, "em": e_mail, "sso": e_sso, "pw": e_pass})
-                            s.commit()
-                        if e_file:
-                            file_path = f"{e_name.strip().replace(' ', '_')}.png"
-                            supabase.storage.from_(BUCKET_NAME).upload(path=file_path, file=e_file.getvalue(), file_options={"content-type": "image/png", "x-upsert": "true"})
-                        st.success("✅ Evaluator added successfully!")
-                        time.sleep(1); st.rerun()
+                    e_mail = col2.text_input("Email*")
+                    e_pass = col2.text_input("Password*")
+                e_file = st.file_uploader("Photo", type=['png', 'jpg'])
+                if st.form_submit_button("Save"):
+                    with conn.session as s:
+                        s.execute(text("INSERT INTO evaluators (name, nickname, email, sso_email, password, has_submitted) VALUES (:n, :nk, :em, :sso, :pw, FALSE)"),
+                                 {"n": e_name, "nk": e_nick, "em": e_mail, "sso": e_sso, "pw": e_pass})
+                        s.commit()
+                    if e_file:
+                        file_path = f"{e_name.strip().replace(' ', '_')}.png"
+                        supabase.storage.from_(BUCKET_NAME).upload(path=file_path, file=e_file.getvalue(), file_options={"x-upsert": "true"})
+                    st.success("✅ Added!"); time.sleep(1); st.rerun()
 
     st.divider()
     status_df = conn.query("SELECT * FROM evaluators ORDER BY name ASC;", ttl=0)
     for _, row in status_df.iterrows():
-        e = row['name']
-        nick = row['nickname']
-        pers_email = row.get('email', '')
-        pwd = row.get('password', '')
-        is_locked = bool(row['has_submitted'])
+        e = row['name']; nick = row['nickname']; pers_email = row.get('email', ''); sso_val = row.get('sso_email')
         c1, c2, c3, c4, c5, c6, c7 = st.columns([0.5, 2.5, 1.5, 0.6, 0.6, 0.6, 0.6])
         img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
-        c1.markdown(f'<img src="{img_url}" style="width:40px; height:40px; border-radius:50%; object-fit:cover;" onerror="this.src=\'https://ui-avatars.com/api/?name={e}\'">', unsafe_allow_html=True)
+        c1.markdown(f'<img src="{img_url}" style="width:40px; height:40px; border-radius:50%;" onerror="this.src=\'https://ui-avatars.com/api/?name={e}\'">', unsafe_allow_html=True)
         with c2:
             st.write(f"**{nick}**")
-            sso_val = row.get('sso_email')
-            auth_status = f"🔗 {sso_val}" if sso_val else "❌ No MS Link"
-            st.caption(f"📧 {pers_email} | {auth_status}")
-        with c3:
-            st.write(f"`{pwd if pwd else 'None'}`")
+            st.caption(f"📧 {pers_email} | SSO: {sso_val if sso_val else 'None'}")
+        c3.write(f"`{row.get('password')}`")
         if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
-            if c4.button("✏️", key=f"edit_eval_{e}"): edit_evaluator_dialog(e, nick, pers_email, pwd)
-            if c6.button("🔄", key=f"unlock_{e}"):
+            if c4.button("✏️", key=f"e_{e}"): edit_evaluator_dialog(e, nick, pers_email, row.get('password'))
+            if c6.button("🔄", key=f"r_{e}"):
                 with conn.session as s:
                     s.execute(text("UPDATE evaluators SET has_submitted = FALSE WHERE name = :n"), {"n": e})
                     s.commit()
                 st.rerun()
-            if c7.button("🗑️", key=f"del_eval_{e}"): confirm_delete_dialog("evaluators", "name", e)
+            if c7.button("🗑️", key=f"d_{e}"): confirm_delete_dialog("evaluators", "name", e)
 
 elif menu_choice == "🔑 User Management":
     st.header("🔑 System Admin Accounts")
-    if st.button("➕ Add New Admin"):
-        add_user_dialog()
-    
+    if st.button("➕ Add New Admin"): add_user_dialog()
     st.divider()
-    users_df = conn.query("SELECT id, username, role, sso_email FROM users ORDER BY id ASC;", ttl=0)
-    
+    users_df = conn.query("SELECT id, username, role FROM users ORDER BY id ASC;", ttl=0)
     for _, row in users_df.iterrows():
         c1, c2, c3, c4 = st.columns([2, 2, 1, 1])
-        with c1:
-            st.write(f"👤 **{row['username']}**")
-            st.caption("Local Admin Account")
-        
+        c1.write(f"👤 **{row['username']}**")
         c2.write(f"Role: `{row['role']}`")
-        
-        # Prevent users from deleting themselves accidentally
-        if c3.button("✏️", key=f"edit_u_{row['id']}"):
-            edit_user_dialog(row['id'], row['username'], row['role'])
-            
+        if c3.button("✏️", key=f"u_{row['id']}"): edit_user_dialog(row['id'], row['username'], row['role'])
         if row['username'] != st.session_state["username"]:
-            if c4.button("🗑️", key=f"del_u_{row['id']}"):
-                confirm_delete_dialog("users", "id", row['id'])
-        else:
-            c4.write("✅ (You)")
+            if c4.button("🗑️", key=f"ud_{row['id']}"): confirm_delete_dialog("users", "id", row['id'])
 
 elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
-
-
-
-
-
-

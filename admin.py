@@ -58,7 +58,29 @@ def add_item_sql(table, column, value):
         st.error(f"DB Error (add_item): {e}")
 
 # --- 2.5 DIALOGS (RESTORING MISSING FEATURES) ---
-
+@st.dialog("📚 Bulk Add Evaluators")
+def bulk_add_evaluators_dialog():
+    st.write("Format: **Full Name, Nickname, SSO Email** (one per line)")
+    raw_data = st.text_area("List of Evaluators", height=200, placeholder="John Doe, John, john@akademisains.gov.my")
+    
+    if st.button("Import All", type="primary"):
+        lines = [line.strip() for line in raw_data.split('\n') if line.strip()]
+        count = 0
+        with conn.session as s:
+            for line in lines:
+                parts = [p.strip() for p in line.split(',')]
+                if len(parts) >= 3:
+                    name, nick, sso = parts[0], parts[1], parts[2]
+                    s.execute(text("""
+                        INSERT INTO evaluators (name, nickname, sso_email, password, has_submitted) 
+                        VALUES (:n, :nk, :sso, 'SSO_USER', FALSE) 
+                        ON CONFLICT (name) DO NOTHING;
+                    """), {"n": name, "nk": nick, "sso": sso})
+                    count += 1
+            s.commit()
+        st.success(f"✅ Successfully imported {count} staff evaluators!")
+        time.sleep(1); st.rerun()
+        
 @st.dialog("📚 Bulk Add Proposals")
 def bulk_add_proposals_dialog():
     st.write("Paste titles below. Separate by **new lines** or **commas**.")
@@ -237,24 +259,28 @@ with st.sidebar:
         st.rerun()
 
 # --- 6. MAIN CONTENT ---
-if menu_choice == "📊 Tracker":
+elif menu_choice == "📊 Tracker":
     st.header("📊 Live Proposal Progress")
     df_scores = conn.query("SELECT * FROM scores;", ttl=0)
     props_all = get_items_sql("proposals", "title")
     evals_df = conn.query("SELECT name, nickname FROM evaluators ORDER BY name ASC;", ttl=0)
    
-    total_props_count = len(props_all)
-    total_required = total_props_count * len(evals_df)
-    current_total_submissions = len(df_scores) if not df_scores.empty else 0
-
-    if not df_scores.empty:
+    # Check if there is actually any data to show
+    if df_scores.empty:
+        st.info("ℹ️ **No evaluations have been submitted yet.** Once evaluators start scoring, the progress bars and averages will appear here.")
+    else:
         numeric_cols = df_scores.select_dtypes(include=['number']).columns
         st.subheader("Current Session Averages")
         st.table(df_scores[numeric_cols].mean().round(2).rename("Global Avg"))
     
-    if total_required > 0:
+    # Still show progress bars if evaluators exist
+    if not evals_df.empty and len(props_all) > 0:
+        total_props_count = len(props_all)
+        total_required = total_props_count * len(evals_df)
+        current_total_submissions = len(df_scores) if not df_scores.empty else 0
+
         st.divider()
-        st.progress(min(current_total_submissions / total_required, 1.0))
+        st.progress(min(current_total_submissions / total_required, 1.0) if total_required > 0 else 0)
         st.write(f"**Total System Progress:** {current_total_submissions} / {total_required} Evaluations Completed")
 
         st.subheader("Evaluator Status")
@@ -263,17 +289,18 @@ if menu_choice == "📊 Tracker":
             name = row['name']
             nick = row['nickname'] if row['nickname'] else name
             done_count = len(df_scores[df_scores['evaluator'] == name]) if not df_scores.empty else 0
-            is_done = (done_count >= total_props_count) and total_props_count > 0
+            is_done = (done_count >= total_props_count)
+            
             bg = "#E6FFFA" if is_done else "#FFFBEB"
             border_col = '#38B2AC' if is_done else '#ECC94B'
             img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{name.replace(' ', '_')}.png?t={cache_buster}"
             
             with cols[i % 4]:
                 st.markdown(f"""
-                    <div class="eval-card" style="background-color:{bg}; border-top: 5px solid {border_col}; padding:10px; border-radius:8px; text-align:center;">
-                        <img src="{img_url}" style="width:50px; height:50px; border-radius:50%; object-fit:cover;" onerror="this.src='https://ui-avatars.com/api/?name={name}'">
-                        <p style="font-weight:bold; margin:0; color:#333;">{nick}</p>
-                        <p style="font-size:1.2em; font-weight:bold; color:#1E3A8A; margin:5px 0;">{done_count} / {total_props_count}</p>
+                    <div style="background-color:{bg}; border-top: 5px solid {border_col}; padding:15px; border-radius:8px; text-align:center; margin-bottom:10px;">
+                        <img src="{img_url}" style="width:60px; height:60px; border-radius:50%; object-fit:cover;" onerror="this.src='https://ui-avatars.com/api/?name={name}'">
+                        <p style="font-weight:bold; margin:5px 0 0 0; color:#333;">{nick}</p>
+                        <p style="font-size:1.1em; font-weight:bold; color:#1E3A8A;">{done_count} / {total_props_count}</p>
                     </div>
                 """, unsafe_allow_html=True)
 
@@ -311,28 +338,46 @@ elif menu_choice == "📋 Proposals":
 
 elif menu_choice == "👤 Evaluators & Links":
     st.header("👤 Evaluators & Access Links")
+    
     if st.session_state["user_role"] != "Viewer":
-        with st.expander("➕ Add New Evaluator"):
+        col_bulk, _ = st.columns([1, 4])
+        with col_bulk:
+            if st.button("📚 Bulk Add Evaluators"):
+                bulk_add_evaluators_dialog() # Ensure this dialog function is defined below
+
+        with st.expander("➕ Add Single Evaluator"):
+            etype = st.radio("Evaluator Type", ["ASM Staff (SSO)", "External (Manual Login)"], horizontal=True)
+            
             with st.form("eval_form", clear_on_submit=True):
                 col1, col2 = st.columns(2)
                 e_name = col1.text_input("Full Name*")
-                e_nick = col1.text_input("Nickname*")
-                e_mail = col2.text_input("Primary Email*")
-                e_pass = col2.text_input("Assign Password*")
-                e_file = st.file_uploader("Photo (Optional)", type=['png', 'jpg'])
+                e_nick = col1.text_input("Display Nickname*")
                 
-                if st.form_submit_button("Create Evaluator", use_container_width=True):
-                    if not e_name.strip() or not e_nick.strip() or not e_mail.strip() or not e_pass.strip():
-                        st.error("🚨 All fields marked with * are required.")
+                if etype == "ASM Staff (SSO)":
+                    e_sso = col2.text_input("Microsoft/SSO Email*", placeholder="user@akademisains.gov.my")
+                    e_mail = col2.text_input("Alternative Contact Email (Optional)")
+                    e_pass = "SSO_USER" # Default filler for staff
+                else:
+                    e_sso = None
+                    e_mail = col2.text_input("Email Address*")
+                    e_pass = col2.text_input("Assign Password*")
+                
+                e_file = st.file_uploader("Upload Photo (Recommended)", type=['png', 'jpg'])
+                
+                if st.form_submit_button("Save Evaluator", use_container_width=True):
+                    if not e_name or not e_nick:
+                        st.error("Name and Nickname are required.")
                     else:
                         with conn.session as s:
-                            s.execute(text("INSERT INTO evaluators (name, nickname, email, password, has_submitted) VALUES (:n, :nk, :em, :pw, FALSE)"), 
-                                     {"n": e_name.strip(), "nk": e_nick.strip(), "em": e_mail.strip(), "pw": e_pass.strip()})
+                            s.execute(text("""
+                                INSERT INTO evaluators (name, nickname, email, sso_email, password, has_submitted) 
+                                VALUES (:n, :nk, :em, :sso, :pw, FALSE)
+                            """), {"n": e_name, "nk": e_nick, "em": e_mail, "sso": e_sso, "pw": e_pass})
                             s.commit()
                         if e_file:
                             file_path = f"{e_name.strip().replace(' ', '_')}.png"
                             supabase.storage.from_(BUCKET_NAME).upload(path=file_path, file=e_file.getvalue(), file_options={"content-type": "image/png", "x-upsert": "true"})
-                        st.success("Evaluator created!")
+                        st.success("✅ Evaluator added successfully!")
                         time.sleep(1); st.rerun()
 
     st.divider()
@@ -392,6 +437,7 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 
 

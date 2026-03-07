@@ -97,14 +97,37 @@ def confirm_delete_dialog(table, column, value):
 
 @st.dialog("✏️ Edit Evaluator")
 def edit_evaluator_dialog(name, nick, email, pwd):
+    st.write(f"Editing: **{name}**")
     new_nick = st.text_input("Nickname", value=nick)
     new_email = st.text_input("Email", value=email)
     new_pwd = st.text_input("Password", value=pwd)
-    if st.button("Save Changes"):
+    
+    # Restoring the photo edit feature
+    new_file = st.file_uploader("Update Photo (Optional)", type=['png', 'jpg'])
+    
+    if st.button("Save Changes", type="primary"):
         with conn.session as s:
-            s.execute(text("UPDATE evaluators SET nickname = :nk, email = :em, password = :pw WHERE name = :n"),
-                      {"nk": new_nick, "em": new_email, "pw": new_pwd, "n": name})
+            s.execute(text("""
+                UPDATE evaluators 
+                SET nickname = :nk, email = :em, password = :pw 
+                WHERE name = :n
+            """), {"nk": new_nick, "em": new_email, "pw": new_pwd, "n": name})
             s.commit()
+        
+        # If a new file is uploaded, overwrite the old one in Supabase
+        if new_file:
+            file_path = f"{name.strip().replace(' ', '_')}.png"
+            try:
+                supabase.storage.from_(BUCKET_NAME).upload(
+                    path=file_path, 
+                    file=new_file.getvalue(), 
+                    file_options={"content-type": "image/png", "x-upsert": "true"}
+                )
+            except Exception as e:
+                st.error(f"Photo upload failed: {e}")
+        
+        st.success("Changes saved!")
+        time.sleep(1)
         st.rerun()
 
 @st.dialog("➕ Add Admin User")
@@ -355,5 +378,6 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 

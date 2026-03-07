@@ -56,19 +56,21 @@ def handle_sso_callback():
 
 # --- 3. THE LOGIN GATEKEEPER ---
 def check_auth():
+    # 1. If already logged in, just let them through
     if st.session_state["authenticated"]:
         return True
 
-    # Check if we are returning from a failed login attempt
+    # 2. Check for "Sticky" Errors from a previous attempt
     if "login_error" in st.session_state:
         st.error(st.session_state["login_error"])
-        if st.button("🔄 Try Again"):
+        if st.button("🔄 Try Again / Clear Error"):
             del st.session_state["login_error"]
             st.rerun()
-        st.stop()
 
+    # 3. Handle the Microsoft Redirect
     ms_email = handle_sso_callback()
     if ms_email:
+        # Check database
         user_data = conn.query(
             "SELECT name FROM evaluators WHERE LOWER(TRIM(sso_email)) = LOWER(:e) LIMIT 1", 
             params={"e": ms_email.strip()}, 
@@ -78,23 +80,23 @@ def check_auth():
         if not user_data.empty:
             st.session_state["authenticated"] = True
             st.session_state["current_user"] = user_data.iloc[0]['name']
+            # Clear any old errors on success
+            if "login_error" in st.session_state:
+                del st.session_state["login_error"]
             st.rerun()
         else:
-            # Store error in session state so it survives the rerun/redirect
-            st.session_state["login_error"] = f"❌ Access Denied: {ms_email} is not registered in the ASM database."
-            st.rerun()
+            # SAVE THE ERROR TO SESSION STATE SO IT PERSISTS
+            st.session_state["login_error"] = f"🚫 Access Denied: '{ms_email}' is not in our evaluator list."
+            st.rerun() # This triggers the app to reload and show the error at the top
 
+    # 4. Show Login UI
     st.title("🛡️ ASM Evaluator Portal")
-    
-    # Information Alert
-    st.warning("🔒 This system is restricted to authorized ASM Evaluators only.")
     
     tab1, tab2 = st.tabs(["Microsoft SSO", "Local Login"])
     
     with tab1:
-        st.info("Log in with your @akademisains.gov.my or registered corporate email.")
+        st.info("Sign in with your registered corporate email.")
         auth_url = get_auth_url()
-        
         login_html = f"""
             <div style="display: flex; justify-content: center;">
                 <a href="{auth_url}" target="_top" style="text-decoration: none; width: 100%;">
@@ -122,9 +124,10 @@ def check_auth():
                     st.session_state["current_user"] = u_name
                     st.rerun()
                 else:
-                    st.error("Invalid name or password. Please try again.")
+                    st.error("Invalid name or password.")
     
     st.stop()
+
 # --- 4. APP LOGIC ---
 check_auth()
 current_user = st.session_state["current_user"]
@@ -265,6 +268,7 @@ else:
                 s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
                 s.commit()
             st.rerun()
+
 
 
 

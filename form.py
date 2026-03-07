@@ -98,7 +98,6 @@ def check_auth():
         st.info("Log in with your @akademisains.gov.my or registered corporate email.")
         auth_url = get_auth_url()
         
-        # NEW TAB REDIRECT + SELF-DESTRUCT UI
         login_html = f"""
             <div id="login-container" style="display: flex; justify-content: center; flex-direction: column; align-items: center; text-align: center;">
                 <button id="sso-button" onclick="openLogin()" style="
@@ -123,11 +122,7 @@ def check_auth():
                     const btn = document.getElementById('sso-button');
                     const loader = document.getElementById('loader');
                     const msg = document.getElementById('close-msg');
-                    
-                    // Open the auth URL in a new window/tab
                     window.open("{auth_url}", "_blank");
-                    
-                    // Update UI to show it has been moved
                     btn.style.display = 'none';
                     loader.style.display = 'block';
                     msg.style.display = 'block';
@@ -192,13 +187,21 @@ with col_txt:
     
     logout_url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/logout?post_logout_redirect_uri={st.secrets.get('redirect_uri')}"
     
-    if st.button("🚪 Sign Out"):
-        st.session_state.clear()
-        # Use location.replace to prevent the "freeze" and clear browser history of the app
-        st.components.v1.html(f"""
-            <script>window.top.location.replace("{logout_url}");</script>
-        """, height=0)
-        st.stop()
+    # --- FIXED ONE-CLICK LOGOUT ---
+    logout_html = f"""
+        <button onclick="logoutNow()" style="
+            background-color: transparent; border: 1px solid #1E3A8A; color: #1E3A8A;
+            padding: 8px 16px; border-radius: 5px; cursor: pointer; font-weight: bold;
+        ">🚪 Sign Out</button>
+        
+        <script>
+            function logoutNow() {{
+                // This informs the parent window to leave IMMEDIATELY
+                window.parent.location.href = "{logout_url}";
+            }}
+        </script>
+    """
+    st.components.v1.html(logout_html, height=50)
 
 # --- 6. PROGRESS TRACKING ---
 try:

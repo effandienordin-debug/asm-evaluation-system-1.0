@@ -42,13 +42,13 @@ def get_msal_app():
 
 def get_auth_url():
     app = get_msal_app()
-    # Scopes must be exactly the same here and in handle_sso_callback
+    # Scopes must match exactly across all parts of the app
     flow = app.initiate_auth_code_flow(["User.Read"], redirect_uri=REDIRECT_URI)
     st.session_state["auth_flow"] = flow
     return flow.get("auth_uri", "#")
 
 def handle_sso_callback():
-    # Convert Streamlit's internal QueryParams object to a standard dict
+    # Convert Streamlit QueryParams to standard dict for MSAL
     params = dict(st.query_params)
     
     if "code" in params and "auth_flow" in st.session_state:
@@ -60,16 +60,13 @@ def handle_sso_callback():
             )
             
             if "id_token_claims" in token_result:
-                # Extracts the email used for Microsoft Login
                 ms_email = token_result["id_token_claims"].get("preferred_username").lower().strip()
-                
-                # Cleanup session and URL
                 st.query_params.clear() 
                 if "auth_flow" in st.session_state:
                     del st.session_state["auth_flow"]
                 return ms_email
             else:
-                st.session_state["login_error"] = token_result.get("error_description", "Unknown Authentication Error")
+                st.session_state["login_error"] = token_result.get("error_description", "Unknown Auth Error")
         except Exception as e:
             st.session_state["login_error"] = f"Callback Error: {str(e)}"
     return None
@@ -79,11 +76,10 @@ def check_auth():
     if st.session_state["authenticated"]:
         return True
 
-    # Check if we are returning from Microsoft
+    # Catch the return from Microsoft
     ms_email = handle_sso_callback()
     
     if ms_email:
-        # Verify if the Microsoft email exists in your Supabase 'evaluators' table
         user_data = conn.query(
             "SELECT name FROM evaluators WHERE LOWER(TRIM(sso_email)) = :e LIMIT 1", 
             params={"e": ms_email}, 
@@ -94,7 +90,7 @@ def check_auth():
             st.session_state["current_user"] = user_data.iloc[0]['name']
             st.rerun()
         else:
-            st.session_state["login_error"] = f"❌ Access Denied: {ms_email} is not registered in the ASM database."
+            st.session_state["login_error"] = f"❌ Access Denied: {ms_email} is not in our system."
             st.rerun()
 
     if "login_error" in st.session_state:
@@ -105,33 +101,18 @@ def check_auth():
         st.stop()
 
     st.title("🛡️ ASM Evaluator Portal")
-    st.warning("🔒 This system is restricted to authorized ASM Evaluators only.")
+    st.warning("🔒 Authorized Access Only")
     
     tab1, tab2 = st.tabs(["Microsoft SSO", "Local Login"])
     
     with tab1:
         try:
             auth_url = get_auth_url()
+            # NATIVE FIX: Using st.link_button instead of HTML/JS
+            st.link_button("🚀 Sign in with Microsoft", auth_url, use_container_width=True, type="primary")
+            st.caption("This will redirect you to the Microsoft secure login page.")
         except Exception as e:
             st.error(f"Config Error: {e}")
-            auth_url = "#"
-
-        # Using window.top.location to break out of the Streamlit iframe
-        login_html = f"""
-            <div style="text-align: center;">
-                <button id="sso-button" 
-                    onclick="window.top.location.href='{auth_url}'" 
-                    style="
-                        width: 100%; background-color: #1E3A8A; color: white; padding: 18px;
-                        border: none; border-radius: 8px; cursor: pointer; font-weight: bold;
-                        font-size: 18px; transition: 0.3s;
-                    ">🚀 Sign in with Microsoft</button>
-                <p style="margin-top: 10px; font-size: 13px; color: #666;">
-                    If the button doesn't respond, <a href="{auth_url}" target="_top" style="color: #1E3A8A;">click here to redirect</a>
-                </p>
-            </div>
-        """
-        st.components.v1.html(login_html, height=150)
 
     with tab2:
         with st.form("local_login"):
@@ -149,16 +130,14 @@ def check_auth():
                     st.error("Invalid credentials.")
     st.stop()
 
-# --- 4. APP LOGIC & LOGOUT HANDLER ---
+# --- 4. APP LOGIC & LOGOUT ---
 check_auth()
 
-# AUTO-REFRESH LOGOUT: Redirects tab to Microsoft, then back to your app URL
 if st.session_state["logging_out"]:
-    logout_url = (
-        f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/logout"
-        f"?post_logout_redirect_uri={REDIRECT_URI}"
-    )
+    # Using the standardized logout endpoint
+    logout_url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/logout?post_logout_redirect_uri={REDIRECT_URI}"
     st.session_state.clear()
+    # This remains JS to ensure the whole page redirects
     st.components.v1.html(f"<script>window.top.location.href = '{logout_url}';</script>", height=0)
     st.stop()
 

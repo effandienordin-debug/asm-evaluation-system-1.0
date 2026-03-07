@@ -374,15 +374,26 @@ elif menu_choice == "👤 Evaluators & Links":
                     e_mail = col2.text_input("Email*")
                     e_pass = col2.text_input("Password*")
                 e_file = st.file_uploader("Photo", type=['png', 'jpg'])
-                if st.form_submit_button("Save"):
-                    with conn.session as s:
-                        s.execute(text("INSERT INTO evaluators (name, nickname, email, sso_email, password, has_submitted) VALUES (:n, :nk, :em, :sso, :pw, FALSE)"),
-                                  {"n": e_name, "nk": e_nick, "em": e_mail, "sso": e_sso, "pw": e_pass})
-                        s.commit()
-                    if e_file:
-                        file_path = f"{e_name.strip().replace(' ', '_')}.png"
-                        supabase.storage.from_(BUCKET_NAME).upload(path=file_path, file=e_file.getvalue(), file_options={"x-upsert": "true"})
-                    st.success("✅ Added!"); time.sleep(1); st.rerun()
+               if st.form_submit_button("Save"):
+                    if not e_name.strip():
+                        st.error("🚨 Name cannot be empty!")
+                    else:
+                        try:
+                            with conn.session as s:
+                                s.execute(text("""
+                                    INSERT INTO evaluators (name, nickname, email, sso_email, password, has_submitted) 
+                                    VALUES (:n, :nk, :em, :sso, :pw, FALSE)
+                                    ON CONFLICT (name) DO NOTHING;
+                                """), {"n": e_name.strip(), "nk": e_nick.strip(), "em": e_mail.strip(), "sso": e_sso, "pw": e_pass})
+                                s.commit()
+                            
+                            if e_file:
+                                file_path = f"{e_name.strip().replace(' ', '_')}.png"
+                                supabase.storage.from_(BUCKET_NAME).upload(path=file_path, file=e_file.getvalue(), file_options={"x-upsert": "true"})
+                            
+                            st.success("✅ Added!"); time.sleep(1); st.rerun()
+                        except Exception as e:
+                            st.error(f"Database Error: {e}")
 
     st.divider()
     status_df = conn.query("SELECT * FROM evaluators ORDER BY name ASC;", ttl=0)
@@ -436,3 +447,4 @@ elif menu_choice == "📜 History":
         st.dataframe(df_hist, use_container_width=True)
     else:
         st.info("ℹ️ No archived data found in history.")
+

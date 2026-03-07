@@ -34,7 +34,6 @@ if "auth_flow" not in st.session_state:
 
 # --- 3. AUTHENTICATION LOGIC ---
 def get_msal_app():
-    # Using the specific Tenant ID for security
     return msal.ConfidentialClientApplication(
         CLIENT_ID, 
         authority=f"https://login.microsoftonline.com/{TENANT_ID}",
@@ -42,93 +41,103 @@ def get_msal_app():
     )
 
 def check_auth():
-    # If already logged in, let them through
     if st.session_state["authenticated"]:
         return True
 
-    # Check URL for the 'code' returned by Microsoft
     params = st.query_params.to_dict()
     
+    # CALLBACK HANDLING (Returning from Microsoft)
     if "code" in params:
-        if not st.session_state["auth_flow"]:
-            st.error("Authentication session expired. Please try clicking the button again.")
-            st.query_params.clear()
-            time.sleep(2)
-            st.rerun()
-            
-        try:
-            app = get_msal_app()
-            result = app.acquire_token_by_auth_code_flow(st.session_state["auth_flow"], params)
-            
-            if "id_token_claims" in result:
-                email = result["id_token_claims"].get("preferred_username").lower().strip()
+        if not st.session_state.get("auth_flow"):
+            st.error("⚠️ Authentication session expired. Please click 'Force Reset' below and try again.")
+        else:
+            try:
+                app = get_msal_app()
+                result = app.acquire_token_by_auth_code_flow(st.session_state["auth_flow"], params)
                 
-                # Verify email exists in your evaluators table
-                user_match = conn.query(
-                    "SELECT name FROM evaluators WHERE LOWER(sso_email) = :e LIMIT 1", 
-                    params={"e": email}, 
-                    ttl=0
-                )
-                
-                if not user_match.empty:
-                    st.session_state["authenticated"] = True
-                    st.session_state["current_user"] = user_match.iloc[0]['name']
-                    st.query_params.clear()
-                    st.rerun()
+                if "id_token_claims" in result:
+                    email = result["id_token_claims"].get("preferred_username").lower().strip()
+                    user_match = conn.query(
+                        "SELECT name FROM evaluators WHERE LOWER(sso_email) = :e LIMIT 1", 
+                        params={"e": email}, ttl=0
+                    )
+                    
+                    if not user_match.empty:
+                        st.session_state["authenticated"] = True
+                        st.session_state["current_user"] = user_match.iloc[0]['name']
+                        st.session_state["auth_flow"] = None 
+                        st.query_params.clear()
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Access Denied: {email} is not authorized.")
+                        st.stop()
                 else:
-                    st.error(f"❌ Access Denied: {email} is not authorized in the database.")
+                    st.error(f"Auth Error: {result.get('error_description', 'Unknown Error')}")
                     st.stop()
-            else:
-                st.error(f"Auth Error: {result.get('error_description', 'Unknown Microsoft Error')}")
+            except Exception as e:
+                st.error(f"System Error: {str(e)}")
                 st.stop()
-        except Exception as e:
-            st.error(f"System Error: {str(e)}")
-            st.stop()
 
-    # If no code and not logged in, show the Login Page
+    # LOGIN PAGE UI
     st.title("🛡️ ASM Evaluator Portal")
     st.info("Authorized Personnel Only")
 
-    # Generate the Auth URL and save the flow to session state
-    app = get_msal_app()
-    flow = app.initiate_auth_code_flow(["User.Read"], redirect_uri=REDIRECT_URI)
-    st.session_state["auth_flow"] = flow
-    auth_url = flow.get("auth_uri")
+    # Only generate flow if it doesn't exist (prevents expiration during redirect)
+    if not st.session_state.get("auth_flow"):
+        try:
+            app = get_msal_app()
+            st.session_state["auth_flow"] = app.initiate_auth_code_flow(["User.Read"], redirect_uri=REDIRECT_URI)
+        except Exception as e:
+            st.error(f"Could not connect to Microsoft: {e}")
+            st.stop()
 
-    # THE BUTTON: Using target="_top" to break out of the Streamlit iframe
+    auth_url = st.session_state["auth_flow"].get("auth_uri")
+
+    # Main SSO Button
     st.markdown(
         f"""
-        <div style="text-align: center; margin-top: 50px;">
+        <div style="text-align: center; margin-top: 30px;">
             <a href="{auth_url}" target="_top" style="
                 text-decoration: none; background-color: #1E3A8A; color: white; 
-                padding: 25px 50px; border-radius: 12px; font-weight: bold; 
-                font-size: 24px; display: inline-block; box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+                padding: 20px 40px; border-radius: 10px; font-weight: bold; 
+                font-size: 20px; display: inline-block; box-shadow: 0 4px 15px rgba(0,0,0,0.3);
             ">🚀 SIGN IN WITH MICROSOFT</a>
-            <p style="margin-top: 20px; color: #666;">This will redirect you to the secure Microsoft login page.</p>
         </div>
         """,
         unsafe_allow_html=True
     )
     
-    # Optional Manual Admin Login
-    with st.expander("Admin/Local Login"):
-        with st.form("local_login"):
-            u_name = st.text_input("Name")
-            u_pass = st.text_input("Password", type="password")
-            if st.form_submit_button("Login"):
-                res = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
-                db_pass = res.iloc[0]['value'] if not res.empty else None
-                if u_pass == db_pass:
-                    st.session_state["authenticated"] = True
-                    st.session_state["current_user"] = u_name
-                    st.rerun()
+    st.divider()
+    
+    col_reset, col_admin = st.columns(2)
+    
+    with col_reset:
+        with st.expander("🛠️ Connection Issues?"):
+            st.write("If you see 'Session Expired' or the button does nothing, use this:")
+            if st.button("🔄 Force Reset Connection", use_container_width=True):
+                st.session_state.clear()
+                st.query_params.clear()
+                st.rerun()
+
+    with col_admin:
+        with st.expander("🔑 Admin/Local Login"):
+            with st.form("local_login"):
+                u_name = st.text_input("Name")
+                u_pass = st.text_input("Password", type="password")
+                if st.form_submit_button("Login", use_container_width=True):
+                    res = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
+                    db_pass = res.iloc[0]['value'] if not res.empty else None
+                    if u_pass == db_pass:
+                        st.session_state["authenticated"] = True
+                        st.session_state["current_user"] = u_name
+                        st.rerun()
     st.stop()
 
 # --- 4. EXECUTE AUTH ---
 check_auth()
 
 # --- 5. LOGOUT HANDLER ---
-if st.sidebar.button("🚪 Logout"):
+if st.sidebar.button("🚪 Logout", use_container_width=True):
     logout_url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/logout?post_logout_redirect_uri={REDIRECT_URI}"
     st.session_state.clear()
     st.markdown(f'<meta http-equiv="refresh" content="0;URL=\'{logout_url}\'">', unsafe_allow_html=True)

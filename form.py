@@ -62,40 +62,34 @@ def handle_sso_callback():
 
 # --- 3. LOGIN & IDENTITY CHECK ---
 def check_auth():
+    # If already logged in, just let them through
     if st.session_state.get("authenticated"):
         return True
 
-    st.title("🛡️ ASM Evaluator Portal")
-    st.write("Please sign in with your corporate Microsoft account to begin.")
-    
-    # 1. Check for callback
+    # 1. Check if we are CURRENTLY returning from Microsoft
     ms_email = handle_sso_callback()
     
     if ms_email:
-        # Cross-reference the verified email with your database sso_email
+        # 2. Verify this email exists in our DB
         user_data = conn.query(
-            "SELECT name, has_submitted FROM evaluators WHERE LOWER(sso_email) = :email LIMIT 1",
-            params={"email": ms_email}, ttl=0
+            "SELECT name FROM evaluators WHERE LOWER(sso_email) = :email LIMIT 1",
+            params={"email": ms_email.strip()}, ttl=0
         )
         
         if not user_data.empty:
-            if user_data.iloc[0]['has_submitted']:
-                st.error("🔒 Your session is already finalized and locked.")
-                return False
-            
             st.session_state["authenticated"] = True
             st.session_state["current_user"] = user_data.iloc[0]['name']
-            st.rerun()
+            st.rerun() # Refresh to clear login UI and show the portal
         else:
-            st.error(f"❌ Access Denied. The email **{ms_email}** is not registered as an evaluator.")
-            st.info("Please contact the Administrator to link your Microsoft account.")
-    
-    # 2. Show Login Button
-    st.link_button("🚀 Sign in with Microsoft", get_auth_url(), use_container_width=True)
-    return False
+            st.error(f"❌ Access Denied: {ms_email} is not on the evaluator list.")
+            st.link_button("Try Again", get_auth_url())
+            st.stop()
 
-if not check_auth():
-    st.stop()
+    # 3. If not returning from MS and not authenticated, show the login button
+    st.title("🛡️ ASM Evaluator Portal")
+    st.info("Please sign in with your corporate Microsoft account.")
+    st.link_button("🚀 Sign in with Microsoft", get_auth_url(), use_container_width=True)
+    st.stop() # This prevents the rest of the script from loading a "blank" portal
 
 current_user = st.session_state["current_user"]
 
@@ -230,4 +224,5 @@ else:
                 s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
                 s.commit()
             st.rerun()
+
 

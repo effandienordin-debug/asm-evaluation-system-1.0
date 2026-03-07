@@ -82,10 +82,8 @@ def bulk_add_evaluators_dialog():
                 if len(parts) >= 4:
                     etype, name, nick, email_val = parts[0].upper(), parts[1], parts[2], parts[3]
                     
-                    # Logic to switch columns based on Type
                     sso_email = email_val if etype == "SSO" else None
                     pers_email = email_val if etype == "EXT" else None
-                    # Generate a random temporary password for External users if none provided
                     pwd = "SSO_USER" if etype == "SSO" else "ASM123!" 
 
                     try:
@@ -194,17 +192,13 @@ def edit_user_dialog(user_id, username, role):
     if st.button("Save Changes", type="primary"):
         with conn.session as s:
             if new_pass:
-                # Update both role and password
                 s.execute(text("UPDATE users SET role = :r, password_hash = :p WHERE id = :id"), 
                           {"r": new_role, "p": new_pass, "id": user_id})
             else:
-                # Update only the role
                 s.execute(text("UPDATE users SET role = :r WHERE id = :id"), 
                           {"r": new_role, "id": user_id})
             s.commit()
-        st.success("User updated!")
-        time.sleep(1)
-        st.rerun()
+        st.success("User updated!"); time.sleep(1); st.rerun()
 
 # --- 3. LOGIN LOGIC ---
 def check_password():
@@ -248,6 +242,14 @@ with st.sidebar:
     menu_options = ["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"]
     if st.session_state.get("user_role") == "SuperAdmin": menu_options.append("🔑 User Management")
     menu_choice = st.radio("Go to Section:", menu_options)
+    
+    st.divider()
+    st.subheader("⚙️ Settings")
+    auto_refresh = st.toggle("🔄 Auto Refresh (10s)", value=False)
+    if auto_refresh:
+        st_autorefresh(interval=10000, key="data_refresh")
+        st.caption("Live Updates: **ON**")
+    
     st.divider()
     if st.button("🚪 Logout", use_container_width=True):
         cookie_manager.delete("asm_admin_user")
@@ -262,7 +264,7 @@ if menu_choice == "📊 Tracker":
     evals_df = conn.query("SELECT name, nickname FROM evaluators ORDER BY name ASC;", ttl=0)
    
     if df_scores.empty:
-        st.info("ℹ️ **No evaluations have been submitted yet.** Once evaluators start scoring, progress will appear here.")
+        st.info("ℹ️ **No evaluations have been submitted yet.**")
     else:
         numeric_cols = df_scores.select_dtypes(include=['number']).columns
         st.subheader("Current Session Averages")
@@ -294,6 +296,28 @@ if menu_choice == "📊 Tracker":
                         <p style="font-size:1.1em; font-weight:bold; color:#1E3A8A;">{done_count} / {total_props_count}</p>
                     </div>
                 """, unsafe_allow_html=True)
+
+    # --- ARCHIVE LOGIC ---
+    if st.session_state["user_role"] == "SuperAdmin":
+        st.divider()
+        with st.expander("⚠️ Danger Zone"):
+            st.warning("Archiving will move all current scores to history and reset the tracker.")
+            if st.button("🗄️ Force Archive & Reset Session", type="primary"):
+                try:
+                    with conn.session as s:
+                        # 1. Archive active scores
+                        s.execute(text("""
+                            INSERT INTO scores_history (evaluator, proposal_title, total_score, archive_timestamp)
+                            SELECT evaluator, proposal_title, total_score, CURRENT_TIMESTAMP FROM scores;
+                        """))
+                        # 2. Clear current session
+                        s.execute(text("TRUNCATE TABLE scores;"))
+                        s.execute(text("UPDATE evaluators SET has_submitted = FALSE;"))
+                        s.commit()
+                    st.success("✅ Session archived and reset!")
+                    time.sleep(1.5); st.rerun()
+                except Exception as e:
+                    st.error(f"Archive failed: {e}")
 
 elif menu_choice == "📋 Proposals":
     st.header("📋 Manage Proposals")
@@ -341,7 +365,7 @@ elif menu_choice == "👤 Evaluators & Links":
                 if st.form_submit_button("Save"):
                     with conn.session as s:
                         s.execute(text("INSERT INTO evaluators (name, nickname, email, sso_email, password, has_submitted) VALUES (:n, :nk, :em, :sso, :pw, FALSE)"),
-                                 {"n": e_name, "nk": e_nick, "em": e_mail, "sso": e_sso, "pw": e_pass})
+                                  {"n": e_name, "nk": e_nick, "em": e_mail, "sso": e_sso, "pw": e_pass})
                         s.commit()
                     if e_file:
                         file_path = f"{e_name.strip().replace(' ', '_')}.png"
@@ -385,5 +409,3 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
-
-

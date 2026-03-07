@@ -7,7 +7,7 @@ from datetime import datetime
 from sqlalchemy import text
 from streamlit_autorefresh import st_autorefresh
 
-# --- 0. INITIALIZE SESSION STATE (Prevents KeyError) ---
+# --- 0. INITIALIZE SESSION STATE ---
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 if "current_user" not in st.session_state:
@@ -61,9 +61,7 @@ def check_auth():
 
     ms_email = handle_sso_callback()
     if ms_email:
-        # DEBUG: Let's see what Microsoft actually sent
-        # st.write(f"Searching for: '{ms_email}'") 
-        
+        # Robust check with TRIM and LOWER to prevent "Access Denied" loops
         user_data = conn.query(
             "SELECT name FROM evaluators WHERE LOWER(TRIM(sso_email)) = LOWER(:e) LIMIT 1", 
             params={"e": ms_email.strip()}, 
@@ -75,29 +73,32 @@ def check_auth():
             st.session_state["current_user"] = user_data.iloc[0]['name']
             st.rerun()
         else:
-            st.error(f"❌ Access Denied: {ms_email} is not registered in the system.")
-            st.info("💡 Tip: Check if the email in the database matches exactly (no extra spaces).")
+            st.error(f"❌ Access Denied: {ms_email} is not registered.")
+            st.info("Please ensure your email is correctly entered in the system database.")
             st.stop()
 
-    # 2. UI: Login Screen
     st.title("🛡️ ASM Evaluator Portal")
-    
     tab1, tab2 = st.tabs(["Microsoft SSO", "Local Login"])
     
     with tab1:
-        st.info("Recommended for official corporate access.")
-        st.link_button("🚀 Sign in with Microsoft", get_auth_url(), use_container_width=True)
+        st.info("Sign in using your corporate account (Same Window).")
+        auth_url = get_auth_url()
+        # Custom HTML to force redirection in the parent window (no new tab)
+        login_html = f"""
+            <button onclick="window.parent.location.href='{auth_url}'" style="
+                width: 100%; background-color: #1E3A8A; color: white; padding: 12px;
+                border: none; border-radius: 5px; cursor: pointer; font-weight: bold;
+            ">🚀 Sign in with Microsoft</button>
+        """
+        st.components.v1.html(login_html, height=70)
 
     with tab2:
         with st.form("local_login"):
             u_name = st.text_input("Evaluator Name")
             u_pass = st.text_input("Password", type="password")
             if st.form_submit_button("Login", use_container_width=True):
-                # Fetch password from settings table
                 res = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
                 db_pass = res.iloc[0]['value'] if not res.empty else None
-                
-                # Check if evaluator exists and password matches
                 eval_check = conn.query("SELECT name FROM evaluators WHERE name = :n LIMIT 1", params={"n": u_name}, ttl=0)
                 
                 if not eval_check.empty and u_pass == db_pass:
@@ -106,14 +107,11 @@ def check_auth():
                     st.rerun()
                 else:
                     st.error("Invalid name or password.")
+    st.stop()
 
-    st.stop() # Stops the rest of the app from running until authenticated
-
-# --- 4. DATA LOAD & APP LOGIC ---
-check_auth() # The Gatekeeper
+# --- 4. APP LOGIC ---
+check_auth()
 current_user = st.session_state["current_user"]
-
-# Autorefresh to keep session alive
 st_autorefresh(interval=30000, key="evaluator_heartbeat")
 
 # Navigation Callbacks
@@ -136,17 +134,27 @@ def get_cloud_list(table, column):
 
 PROPOSALS = get_cloud_list("proposals", "title")
 
-# --- 5. HEADER ---
+# --- 5. HEADER & SIGN OUT ---
 cache_buster = datetime.now().strftime("%Y%m%d%H%M%S")
 col_img, col_txt = st.columns([1, 4])
+
 with col_img:
     img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{current_user.replace(' ', '_')}.png?t={cache_buster}"
     st.markdown(f'<div style="text-align: center;"><img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; border: 3px solid #1E3A8A;" onerror="this.src=\'https://ui-avatars.com/api/?name={current_user}\'"></div>', unsafe_allow_html=True)
+
 with col_txt:
     st.title(f"Welcome, {current_user}")
+    
+    # Custom Logout: Clears Streamlit State + Microsoft Session
+    logout_url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/logout?post_logout_redirect_uri={st.secrets.get('redirect_uri')}"
+    
     if st.button("🚪 Sign Out"):
         st.session_state.clear()
-        st.rerun()
+        # This HTML snippet triggers the MS Logout and redirects back to your app
+        st.components.v1.html(f"""
+            <script>window.parent.location.href = "{logout_url}";</script>
+        """, height=0)
+        st.stop()
 
 # --- 6. PROGRESS TRACKING ---
 try:
@@ -165,10 +173,8 @@ except:
     scored_df = pd.DataFrame()
     completed_proposals = []
 
-total_count = len(PROPOSALS)
-done_count = len(completed_proposals)
-st.write(f"**Progress: {done_count} / {total_count} Proposals**")
-st.progress(done_count / total_count if total_count > 0 else 0)
+st.write(f"**Progress: {len(completed_proposals)} / {len(PROPOSALS)} Proposals**")
+st.progress(len(completed_proposals) / len(PROPOSALS) if PROPOSALS else 0)
 st.divider()
 
 # --- 7. EVALUATION FORM ---
@@ -202,7 +208,6 @@ if selected_proposal != "-- Select --":
             
             clean_comm = re.sub(r"\[MERGE WITH:.*?\] ", "", str(existing_data['comments']) if existing_data is not None else "")
             user_comments = st.text_area("Comments", value=clean_comm)
-            
             recom_options = ["Pending", "Approve", "Revise", "Reject", "Combine/Merge"]
             cur_rec = str(existing_data['recommendation']) if existing_data is not None else "Pending"
             recom = st.radio("Recommendation", recom_options, index=recom_options.index(cur_rec) if cur_rec in recom_options else 0, horizontal=True)
@@ -216,7 +221,6 @@ if selected_proposal != "-- Select --":
                 w_sum = sum(inputs[name] * weight for name, weight in CRITERIA)
                 final_total = round(w_sum, 2)
                 final_comm = f"[MERGE WITH: {merge_target}] {user_comments}" if recom == "Combine/Merge" else user_comments
-
                 with conn.session as s:
                     s.execute(text("""INSERT INTO scores (evaluator, proposal_title, strategic_alignment, potential_impact, feasibility, budget_justification, timeline_readiness, execution_strategy, total, recommendation, comments, last_updated)
                         VALUES (:ev, :prop, :s1, :s2, :s3, :s4, :s5, :s6, :tot, :rec, :comm, :ts)
@@ -227,11 +231,8 @@ if selected_proposal != "-- Select --":
                         total=EXCLUDED.total, recommendation=EXCLUDED.recommendation, comments=EXCLUDED.comments, last_updated=EXCLUDED.last_updated"""),
                         {"ev": current_user, "prop": selected_proposal, "s1": inputs['Strategic Alignment'], "s2": inputs['Potential Impact'], "s3": inputs['Feasibility'], "s4": inputs['Budget Justification'], "s5": inputs['Timeline Readiness'], "s6": inputs['Execution Strategy'], "tot": final_total, "rec": recom, "comm": final_comm, "ts": datetime.now()})
                     s.commit()
-                st.success("Saved!")
-                time.sleep(1); st.rerun()
-
+                st.success("Saved!"); time.sleep(1); st.rerun()
 else:
-    # --- 8. SUMMARY TABLE ---
     st.subheader("📊 Your Summary")
     if not scored_df.empty:
         st.dataframe(scored_df[["proposal_title", "total", "recommendation"]], use_container_width=True, hide_index=True)
@@ -242,10 +243,9 @@ else:
             for p in rem:
                 st.button(f"📝 Start: {p}", key=f"btn_{p}", use_container_width=True, on_click=nav_to_proposal, args=(p,))
 
-    if not rem and total_count > 0:
+    if not rem and len(PROPOSALS) > 0:
         if st.button("🏁 Finalize & Close Session", type="primary", use_container_width=True):
             with conn.session as s:
                 s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
                 s.commit()
             st.rerun()
-

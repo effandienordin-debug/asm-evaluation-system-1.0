@@ -41,13 +41,11 @@ def get_msal_app():
     )
 
 def get_auth_url():
-    try:
-        app = get_msal_app()
-        flow = app.initiate_auth_code_flow(["User.Read"], redirect_uri=REDIRECT_URI)
-        st.session_state["auth_flow"] = flow
-        return flow.get("auth_uri", "")
-    except Exception as e:
-        return f"ERROR: {str(e)}"
+    app = get_msal_app()
+    # Scopes must match exactly
+    flow = app.initiate_auth_code_flow(["User.Read"], redirect_uri=REDIRECT_URI)
+    st.session_state["auth_flow"] = flow
+    return flow.get("auth_uri", "")
 
 def handle_sso_callback():
     params = dict(st.query_params)
@@ -64,8 +62,6 @@ def handle_sso_callback():
                 if "auth_flow" in st.session_state:
                     del st.session_state["auth_flow"]
                 return ms_email
-            else:
-                st.session_state["login_error"] = token_result.get("error_description", "Auth Failed")
         except Exception as e:
             st.session_state["login_error"] = f"Error: {str(e)}"
     return None
@@ -87,31 +83,22 @@ def check_auth():
             st.session_state["current_user"] = user_data.iloc[0]['name']
             st.rerun()
         else:
-            st.session_state["login_error"] = f"❌ Access Denied: {ms_email} not found."
-            st.rerun()
+            st.error(f"❌ Access Denied: {ms_email} is not in the system.")
+            st.stop()
 
     st.title("🛡️ ASM Evaluator Portal")
     
     tab1, tab2 = st.tabs(["Microsoft SSO", "Local Login"])
     
     with tab1:
+        # FAILSAFE: Using st.link_button. It is a native Streamlit component 
+        # that bypasses iframe JS restrictions entirely.
         auth_url = get_auth_url()
-        
-        # DEBUG: Only shows if the URL fails to generate
-        if "ERROR" in auth_url or not auth_url:
-            st.error(f"Failed to generate Microsoft Login URL: {auth_url}")
-            st.info(f"Check your Redirect URI: {REDIRECT_URI}")
+        if auth_url:
+            st.link_button("🚀 Sign in with Microsoft", auth_url, use_container_width=True, type="primary")
+            st.caption("Clicking this will take you to the secure Microsoft login page.")
         else:
-            # Reverting to the window.top.location JS button
-            login_html = f"""
-                <div style="text-align: center;">
-                    <button onclick="window.top.location.href='{auth_url}'" 
-                        style="width: 100%; background-color: #1E3A8A; color: white; padding: 20px;
-                        border: none; border-radius: 10px; cursor: pointer; font-weight: bold;
-                        font-size: 20px;">🚀 Sign in with Microsoft</button>
-                </div>
-            """
-            st.components.v1.html(login_html, height=120)
+            st.error("Could not generate Login URL. Verify your Azure Secrets.")
 
     with tab2:
         with st.form("local_login"):
@@ -135,10 +122,11 @@ check_auth()
 if st.session_state["logging_out"]:
     logout_url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/logout?post_logout_redirect_uri={REDIRECT_URI}"
     st.session_state.clear()
-    st.components.v1.html(f"<script>window.top.location.href = '{logout_url}';</script>", height=0)
+    # Full page redirect for logout
+    st.markdown(f'<meta http-equiv="refresh" content="0;URL=\'{logout_url}\'">', unsafe_allow_html=True)
     st.stop()
 
-# --- 5. MAIN CONTENT (STAYED THE SAME) ---
+# --- 5. MAIN EVALUATION SYSTEM (UNCHANGED) ---
 current_user = st.session_state["current_user"]
 st_autorefresh(interval=30000, key="evaluator_heartbeat")
 
@@ -197,7 +185,9 @@ if selected_proposal != "-- Select --":
         st.success(f"✅ Record found for: {selected_proposal}")
         st.metric("Total Score", f"{existing_data['total']} / 5.0")
         c1, c2 = st.columns(2)
-        c1.button("✏️ Edit", use_container_width=True, on_click=lambda: st.session_state.update({"is_editing": True}))
+        if c1.button("✏️ Edit", use_container_width=True):
+            st.session_state.is_editing = True
+            st.rerun()
         c2.button("⬅️ Summary", use_container_width=True, on_click=nav_to_summary)
     else:
         with st.form("eval_form"):

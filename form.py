@@ -16,7 +16,6 @@ if "logging_out" not in st.session_state:
     st.session_state["logging_out"] = False
 
 # --- 1. CONFIGURATION ---
-# Mapping variables to your specific secrets.toml keys
 CLIENT_ID = st.secrets["azure_client_id"]
 CLIENT_SECRET = st.secrets["azure_client_secret"]
 TENANT_ID = st.secrets["azure_tenant_id"]
@@ -43,31 +42,36 @@ def get_msal_app():
 
 def get_auth_url():
     app = get_msal_app()
-    # initiate_auth_code_flow creates a secure, one-time use URL
+    # Scopes must be exactly the same here and in handle_sso_callback
     flow = app.initiate_auth_code_flow(["User.Read"], redirect_uri=REDIRECT_URI)
     st.session_state["auth_flow"] = flow
     return flow.get("auth_uri", "#")
 
 def handle_sso_callback():
-    params = st.query_params
+    # Convert Streamlit's internal QueryParams object to a standard dict
+    params = dict(st.query_params)
+    
     if "code" in params and "auth_flow" in st.session_state:
         try:
             app = get_msal_app()
-            # Validate the code against the flow stored in session state
             token_result = app.acquire_token_by_auth_code_flow(
                 st.session_state["auth_flow"], 
                 params
             )
+            
             if "id_token_claims" in token_result:
-                ms_email = token_result["id_token_claims"].get("preferred_username").lower()
+                # Extracts the email used for Microsoft Login
+                ms_email = token_result["id_token_claims"].get("preferred_username").lower().strip()
+                
+                # Cleanup session and URL
                 st.query_params.clear() 
                 if "auth_flow" in st.session_state:
                     del st.session_state["auth_flow"]
                 return ms_email
+            else:
+                st.session_state["login_error"] = token_result.get("error_description", "Unknown Authentication Error")
         except Exception as e:
-            st.session_state["login_error"] = f"Authentication Error: {str(e)}"
-            st.query_params.clear()
-            st.rerun()
+            st.session_state["login_error"] = f"Callback Error: {str(e)}"
     return None
 
 # --- 3. THE LOGIN GATEKEEPER ---
@@ -75,18 +79,14 @@ def check_auth():
     if st.session_state["authenticated"]:
         return True
 
-    if "login_error" in st.session_state:
-        st.error(st.session_state["login_error"])
-        if st.button("🔄 Try Again"):
-            del st.session_state["login_error"]
-            st.rerun()
-        st.stop()
-
+    # Check if we are returning from Microsoft
     ms_email = handle_sso_callback()
+    
     if ms_email:
+        # Verify if the Microsoft email exists in your Supabase 'evaluators' table
         user_data = conn.query(
-            "SELECT name FROM evaluators WHERE LOWER(TRIM(sso_email)) = LOWER(:e) LIMIT 1", 
-            params={"e": ms_email.strip()}, 
+            "SELECT name FROM evaluators WHERE LOWER(TRIM(sso_email)) = :e LIMIT 1", 
+            params={"e": ms_email}, 
             ttl=0
         )
         if not user_data.empty:
@@ -94,8 +94,15 @@ def check_auth():
             st.session_state["current_user"] = user_data.iloc[0]['name']
             st.rerun()
         else:
-            st.session_state["login_error"] = f"❌ Access Denied: {ms_email} is not registered."
+            st.session_state["login_error"] = f"❌ Access Denied: {ms_email} is not registered in the ASM database."
             st.rerun()
+
+    if "login_error" in st.session_state:
+        st.error(st.session_state["login_error"])
+        if st.button("🔄 Try Again"):
+            del st.session_state["login_error"]
+            st.rerun()
+        st.stop()
 
     st.title("🛡️ ASM Evaluator Portal")
     st.warning("🔒 This system is restricted to authorized ASM Evaluators only.")
@@ -106,10 +113,10 @@ def check_auth():
         try:
             auth_url = get_auth_url()
         except Exception as e:
-            st.error(f"Error generating Auth URL: {e}")
+            st.error(f"Config Error: {e}")
             auth_url = "#"
 
-        # JS window.top.location ensures we redirect the main page, not just the iframe
+        # Using window.top.location to break out of the Streamlit iframe
         login_html = f"""
             <div style="text-align: center;">
                 <button id="sso-button" 
@@ -120,14 +127,9 @@ def check_auth():
                         font-size: 18px; transition: 0.3s;
                     ">🚀 Sign in with Microsoft</button>
                 <p style="margin-top: 10px; font-size: 13px; color: #666;">
-                    If the button doesn't respond, <a href="{auth_url}" target="_top" style="color: #1E3A8A; text-decoration: underline;">click here to redirect</a>
+                    If the button doesn't respond, <a href="{auth_url}" target="_top" style="color: #1E3A8A;">click here to redirect</a>
                 </p>
             </div>
-            <script>
-                const btn = document.getElementById('sso-button');
-                btn.onmouseover = () => btn.style.backgroundColor = '#2563EB';
-                btn.onmouseout = () => btn.style.backgroundColor = '#1E3A8A';
-            </script>
         """
         st.components.v1.html(login_html, height=150)
 
@@ -150,7 +152,7 @@ def check_auth():
 # --- 4. APP LOGIC & LOGOUT HANDLER ---
 check_auth()
 
-# FIXED: Redirects the entire browser tab to MS Logout, then back to your app
+# AUTO-REFRESH LOGOUT: Redirects tab to Microsoft, then back to your app URL
 if st.session_state["logging_out"]:
     logout_url = (
         f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/logout"
@@ -191,7 +193,6 @@ with col_img:
 
 with col_txt:
     st.title(f"Welcome, {current_user}")
-    # Trigger the logging_out sequence
     if st.button("🚪 Sign Out", use_container_width=True):
         st.session_state["logging_out"] = True
         st.rerun()

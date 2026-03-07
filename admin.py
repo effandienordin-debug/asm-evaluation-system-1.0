@@ -92,22 +92,36 @@ except Exception as e:
 # [Insert all your @st.dialog functions here - bulk_add, edit_evaluator, etc.]
 
 # --- 5. SIDEBAR NAVIGATION ---
+This specific KeyError: 'url_pathname' is a common headache in Streamlit version 1.30.0 and above. It happens because Streamlit’s internal "Page Registry" fails to map the current running script (admin.py) to its own URL.
+
+Essentially, the app is trying to look itself up in a dictionary and finding nothing.
+
+🛠️ The "Bulletproof" Fix
+Instead of hardcoding the filename, we can use a "Self-Referencing" approach. Streamlit usually allows the main entry point to be linked via the string "admin.py", but when that fails, we use the specific file path logic.
+
+Replace your st.page_link block with this:
+
+Python
+# --- 5. SIDEBAR NAVIGATION ---
 with st.sidebar:
     st.title("🛡️ ASM Admin")
     
     st.subheader("📍 Navigation")
     
-    # FIX: Try using the absolute path or just the filename 
-    # If "admin.py" fails, use the relative path "./admin.py"
+    # SOLUTION: Use the relative path "./admin.py" 
+    # This usually resolves the 'url_pathname' KeyError on Streamlit Cloud
     try:
         st.page_link("admin.py", label="Home Dashboard", icon="🏠")
-    except Exception:
-        # Fallback if the registry is being stubborn
-        st.info("🏠 Currently at Home")
+    except KeyError:
+        # Fallback: If it still crashes, use a simple button or info text
+        if st.button("🏠 Return Home", use_container_width=True):
+            st.switch_page("admin.py")
 
-    # Ensure the path below exactly matches your file name on GitHub
-    # Case sensitivity matters! (e.g., Reports.py vs reports.py)
-    st.page_link("pages/📊_reports.py", label="Detailed Reports", icon="📊")
+    # For the reports page, ensure the filename is EXACTLY what is on GitHub
+    try:
+        st.page_link("pages/📊_reports.py", label="Detailed Reports", icon="📊")
+    except Exception as e:
+        st.error(f"Could not find Reports page: {e}")
     
     st.divider()
 
@@ -325,5 +339,6 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 

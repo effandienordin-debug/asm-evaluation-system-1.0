@@ -101,7 +101,10 @@ def edit_evaluator_dialog(name, nick, email, pwd):
     new_nick = st.text_input("Nickname", value=nick)
     new_email = st.text_input("Email", value=email)
     new_pwd = st.text_input("Password", value=pwd)
+    eval_data = conn.query("SELECT sso_email FROM evaluators WHERE name = :n", params={"n": name}, ttl=0)
+    current_sso = eval_data.iloc[0]['sso_email'] if not eval_data.empty else ""
     
+    new_sso = st.text_input("Microsoft/SSO Email (for Login)", value=current_sso if current_sso else "")
     # Restoring the photo edit feature
     new_file = st.file_uploader("Update Photo (Optional)", type=['png', 'jpg'])
     
@@ -345,7 +348,9 @@ elif menu_choice == "👤 Evaluators & Links":
         c1.markdown(f'<img src="{img_url}" style="width:40px; height:40px; border-radius:50%; object-fit:cover;" onerror="this.src=\'https://ui-avatars.com/api/?name={e}\'">', unsafe_allow_html=True)
         with c2:
             st.write(f"**{nick}**")
-            st.caption(f"📧 {pers_email} | {'🔒 LOCKED' if is_locked else '🔓 OPEN'}")
+            sso_val = row.get('sso_email')
+            auth_status = f"🔗 {sso_val}" if sso_val else "❌ No MS Link"
+            st.caption(f"📧 {pers_email} | {auth_status}")
         with c3:
             st.write(f"`{pwd if pwd else 'None'}`")
         if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
@@ -369,7 +374,7 @@ elif menu_choice == "🔑 User Management":
         c1, c2, c3, c4 = st.columns([2, 2, 1, 1])
         with c1:
             st.write(f"👤 **{row['username']}**")
-            st.caption(f"MS Auth: {row['sso_email'] or 'Not Linked'}")
+            st.caption("Local Admin Account")
         
         c2.write(f"Role: `{row['role']}`")
         
@@ -387,6 +392,7 @@ elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
     df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
     st.dataframe(df_hist, use_container_width=True)
+
 
 
 

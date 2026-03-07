@@ -12,6 +12,8 @@ if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 if "current_user" not in st.session_state:
     st.session_state["current_user"] = None
+if "logging_out" not in st.session_state:
+    st.session_state["logging_out"] = False
 
 # --- 1. CONFIGURATION ---
 CLIENT_ID = st.secrets["azure_client_id"]
@@ -40,7 +42,6 @@ def get_msal_app():
 def get_auth_url():
     return get_msal_app().get_authorization_request_url(["User.Read"])
 
-# --- 2. UPDATED CALLBACK HANDLER ---
 def handle_sso_callback():
     params = st.query_params
     if "code" in params:
@@ -66,6 +67,7 @@ def check_auth():
     if st.session_state["authenticated"]:
         return True
 
+    # Check for login errors
     if "login_error" in st.session_state:
         st.error(st.session_state["login_error"])
         if st.button("🔄 Try Again"):
@@ -73,6 +75,7 @@ def check_auth():
             st.rerun()
         st.stop()
 
+    # Process callback
     ms_email = handle_sso_callback()
     if ms_email:
         user_data = conn.query(
@@ -86,7 +89,7 @@ def check_auth():
             st.session_state["current_user"] = user_data.iloc[0]['name']
             st.rerun()
         else:
-            st.session_state["login_error"] = f"❌ Access Denied: {ms_email} is not registered in the ASM database."
+            st.session_state["login_error"] = f"❌ Access Denied: {ms_email} is not registered."
             st.rerun()
 
     st.title("🛡️ ASM Evaluator Portal")
@@ -95,41 +98,16 @@ def check_auth():
     tab1, tab2 = st.tabs(["Microsoft SSO", "Local Login"])
     
     with tab1:
-        st.info("Log in with your @akademisains.gov.my or registered corporate email.")
         auth_url = get_auth_url()
-        
+        # SINGLE WINDOW REDIRECT
         login_html = f"""
-            <div id="login-container" style="display: flex; justify-content: center; flex-direction: column; align-items: center; text-align: center;">
-                <button id="sso-button" onclick="openLogin()" style="
-                    width: 100%; background-color: #1E3A8A; color: white; padding: 14px;
-                    border: none; border-radius: 8px; cursor: pointer; font-weight: bold;
-                    font-size: 16px; display: flex; align-items: center; justify-content: center;
-                ">
-                    <span id="btn-text">🚀 Open Login in New Tab</span>
-                </button>
-                <div id="loader" style="display: none; margin-top: 15px; border: 4px solid #f3f3f3; border-top: 4px solid #1E3A8A; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite;"></div>
-                <div id="close-msg" style="display: none; margin-top: 15px; color: #d9534f; font-weight: bold;">
-                    ⚠️ Login opened in a new tab.<br>You may now close this tab safely.
-                </div>
-            </div>
-
-            <style>
-                @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
-            </style>
-
-            <script>
-                function openLogin() {{
-                    const btn = document.getElementById('sso-button');
-                    const loader = document.getElementById('loader');
-                    const msg = document.getElementById('close-msg');
-                    window.open("{auth_url}", "_blank");
-                    btn.style.display = 'none';
-                    loader.style.display = 'block';
-                    msg.style.display = 'block';
-                }}
-            </script>
+            <button id="sso-button" onclick="parent.location.href='{auth_url}'" style="
+                width: 100%; background-color: #1E3A8A; color: white; padding: 14px;
+                border: none; border-radius: 8px; cursor: pointer; font-weight: bold;
+                font-size: 16px;
+            ">🚀 Sign in with Microsoft</button>
         """
-        st.components.v1.html(login_html, height=180)
+        st.components.v1.html(login_html, height=80)
 
     with tab2:
         with st.form("local_login"):
@@ -139,18 +117,24 @@ def check_auth():
                 res = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
                 db_pass = res.iloc[0]['value'] if not res.empty else None
                 eval_check = conn.query("SELECT name FROM evaluators WHERE name = :n LIMIT 1", params={"n": u_name}, ttl=0)
-                
                 if not eval_check.empty and u_pass == db_pass:
                     st.session_state["authenticated"] = True
                     st.session_state["current_user"] = u_name
                     st.rerun()
                 else:
-                    st.error("Invalid name or password. Please try again.")
-    
+                    st.error("Invalid credentials.")
     st.stop()
 
-# --- 4. APP LOGIC ---
+# --- 4. APP LOGIC & LOGOUT HANDLER ---
 check_auth()
+
+# IMMEDIATE LOGOUT REDIRECTOR (Prevents the "freeze")
+if st.session_state["logging_out"]:
+    logout_url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/logout?post_logout_redirect_uri={st.secrets.get('redirect_uri')}"
+    st.session_state.clear()
+    st.components.v1.html(f"<script>window.top.location.href = '{logout_url}';</script>", height=0)
+    st.stop()
+
 current_user = st.session_state["current_user"]
 st_autorefresh(interval=30000, key="evaluator_heartbeat")
 
@@ -175,47 +159,22 @@ def get_cloud_list(table, column):
 PROPOSALS = get_cloud_list("proposals", "title")
 
 # --- 5. HEADER & SIGN OUT ---
-cache_buster = datetime.now().strftime("%Y%m%d%H%M%S")
 col_img, col_txt = st.columns([1, 4])
-
 with col_img:
-    img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{current_user.replace(' ', '_')}.png?t={cache_buster}"
+    img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{current_user.replace(' ', '_')}.png"
     st.markdown(f'<div style="text-align: center;"><img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; border: 3px solid #1E3A8A;" onerror="this.src=\'https://ui-avatars.com/api/?name={current_user}\'"></div>', unsafe_allow_html=True)
 
 with col_txt:
     st.title(f"Welcome, {current_user}")
-    
-    logout_url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/logout?post_logout_redirect_uri={st.secrets.get('redirect_uri')}"
-    
-    # --- FIXED ONE-CLICK LOGOUT ---
-    logout_html = f"""
-        <button onclick="logoutNow()" style="
-            background-color: transparent; border: 1px solid #1E3A8A; color: #1E3A8A;
-            padding: 8px 16px; border-radius: 5px; cursor: pointer; font-weight: bold;
-        ">🚪 Sign Out</button>
-        
-        <script>
-            function logoutNow() {{
-                // This informs the parent window to leave IMMEDIATELY
-                window.parent.location.href = "{logout_url}";
-            }}
-        </script>
-    """
-    st.components.v1.html(logout_html, height=50)
+    # ONE-CLICK LOGOUT BUTTON
+    if st.button("🚪 Sign Out"):
+        st.session_state["logging_out"] = True
+        st.rerun()
 
 # --- 6. PROGRESS TRACKING ---
 try:
     scored_df = conn.query("SELECT proposal_title, total, recommendation, comments FROM scores WHERE evaluator = :ev", params={"ev": current_user}, ttl=0)
     completed_proposals = scored_df['proposal_title'].tolist() if not scored_df.empty else []
-    
-    def extract_merge_target(comment):
-        if pd.isna(comment): return ""
-        match = re.search(r"\[MERGE WITH: (.*?)\]", str(comment))
-        return match.group(1) if match else ""
-
-    if not scored_df.empty:
-        scored_df['merge_target'] = scored_df['comments'].apply(extract_merge_target)
-        scored_df['display_comments'] = scored_df['comments'].str.replace(r"\[MERGE WITH:.*?\] ", "", regex=True)
 except:
     scored_df = pd.DataFrame()
     completed_proposals = []
@@ -289,10 +248,3 @@ else:
         with st.expander(f"⏳ Remaining ({len(rem)})"):
             for p in rem:
                 st.button(f"📝 Start: {p}", key=f"btn_{p}", use_container_width=True, on_click=nav_to_proposal, args=(p,))
-
-    if not rem and len(PROPOSALS) > 0:
-        if st.button("🏁 Finalize & Close Session", type="primary", use_container_width=True):
-            with conn.session as s:
-                s.execute(text("UPDATE evaluators SET has_submitted = TRUE WHERE name = :name"), {"name": current_user})
-                s.commit()
-            st.rerun()

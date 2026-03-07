@@ -54,7 +54,6 @@ def check_auth():
         else:
             try:
                 app = get_msal_app()
-                # This exchanges the code for a token and validates the 'state'
                 result = app.acquire_token_by_auth_code_flow(flow, params)
                 
                 if "id_token_claims" in result:
@@ -67,7 +66,7 @@ def check_auth():
                     if not user_match.empty:
                         st.session_state["authenticated"] = True
                         st.session_state["current_user"] = user_match.iloc[0]['name']
-                        st.session_state["auth_flow"] = None # Clear flow on success
+                        st.session_state["auth_flow"] = None
                         st.query_params.clear()
                         st.rerun()
                     else:
@@ -75,7 +74,7 @@ def check_auth():
                         st.stop()
                 else:
                     st.error(f"Microsoft Error: {result.get('error_description')}")
-                    st.session_state["auth_flow"] = None # Reset flow to allow retry
+                    st.session_state["auth_flow"] = None
             except Exception as e:
                 st.error(f"Auth System Error: {str(e)}")
                 st.session_state["auth_flow"] = None
@@ -85,7 +84,6 @@ def check_auth():
     st.title("🛡️ ASM Evaluator Portal")
     st.info("Authorized Personnel Only")
 
-    # STICKY FLOW: Only generate if we don't have one in progress
     if st.session_state["auth_flow"] is None:
         try:
             app = get_msal_app()
@@ -96,15 +94,16 @@ def check_auth():
 
     auth_url = st.session_state["auth_flow"].get("auth_uri")
 
-    # The "Breakout" Button
+    # MODIFIED: target="_blank" opens login in a NEW TAB
     st.markdown(
         f"""
         <div style="text-align: center; margin-top: 50px;">
-            <a href="{auth_url}" target="_top" style="
+            <a href="{auth_url}" target="_blank" style="
                 text-decoration: none; background-color: #1E3A8A; color: white; 
                 padding: 25px 50px; border-radius: 12px; font-weight: bold; 
                 font-size: 24px; display: inline-block; box-shadow: 0 4px 15px rgba(0,0,0,0.3);
             ">🚀 SIGN IN WITH MICROSOFT</a>
+            <p style="margin-top: 15px; color: gray;">(Opens in a new tab)</p>
         </div>
         """,
         unsafe_allow_html=True
@@ -113,10 +112,13 @@ def check_auth():
     st.divider()
     col_a, col_b = st.columns(2)
     with col_a:
+        # ENHANCED RESET: Clears everything to force a new flow generation
         if st.button("🔄 Force Reset Connection", use_container_width=True):
-            st.session_state["auth_flow"] = None
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
             st.query_params.clear()
             st.rerun()
+            
     with col_b:
         with st.expander("🔑 Admin/Local Login"):
             with st.form("local_login"):
@@ -141,7 +143,7 @@ if st.sidebar.button("🚪 Logout", use_container_width=True):
     st.markdown(f'<meta http-equiv="refresh" content="0;URL=\'{logout_url}\'">', unsafe_allow_html=True)
     st.stop()
 
-# --- 6. APP CONTENT ---
+# --- 6. APP CONTENT (REMAINING CODE UNCHANGED) ---
 current_user = st.session_state["current_user"]
 st_autorefresh(interval=30000, key="evaluator_heartbeat")
 

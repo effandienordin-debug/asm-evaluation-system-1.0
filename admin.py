@@ -450,12 +450,72 @@ elif menu_choice == "🔑 User Management":
 
 elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
-    df_hist = conn.query("SELECT * FROM scores_history ORDER BY archive_timestamp DESC;", ttl=0)
+    
+    # --- 1. FETCH FILTER OPTIONS ---
+    # We pull these from the history table to ensure filters match archived data
+    eval_list = conn.query("SELECT DISTINCT evaluator FROM scores_history ORDER BY evaluator", ttl=0)
+    prop_list = conn.query("SELECT DISTINCT proposal_title FROM scores_history ORDER BY proposal_title", ttl=0)
+
+    # --- 2. FILTER INTERFACE ---
+    with st.expander("🔍 Filter Archives", expanded=True):
+        f_col1, f_col2, f_col3 = st.columns(3)
+        
+        with f_col1:
+            sel_evals = st.multiselect(
+                "Filter by Evaluator", 
+                options=eval_list['evaluator'].tolist() if not eval_list.empty else []
+            )
+        
+        with f_col2:
+            sel_props = st.multiselect(
+                "Filter by Proposal", 
+                options=prop_list['proposal_title'].tolist() if not prop_list.empty else []
+            )
+            
+        with f_col3:
+            # Date input returns a tuple (start, end)
+            sel_dates = st.date_input("Filter by Archive Date", value=[])
+
+    # --- 3. CONSTRUCT DYNAMIC SQL ---
+    query_str = "SELECT * FROM scores_history WHERE 1=1"
+    params = {}
+
+    if sel_evals:
+        query_str += " AND evaluator IN :evals"
+        params["evals"] = tuple(sel_evals)
+
+    if sel_props:
+        query_str += " AND proposal_title IN :props"
+        params["props"] = tuple(sel_props)
+
+    if len(sel_dates) == 2:
+        query_str += " AND archive_timestamp::date BETWEEN :start AND :end"
+        params["start"] = sel_dates[0]
+        params["end"] = sel_dates[1]
+
+    query_str += " ORDER BY archive_timestamp DESC"
+
+    # --- 4. EXECUTE & DISPLAY ---
+    df_hist = conn.query(query_str, params=params, ttl=0)
+
     if not df_hist.empty:
+        # Summary metrics for the filtered view
+        st.caption(f"Showing {len(df_hist)} archived records based on current filters.")
+        
+        # Action Buttons (Download)
         csv_history = df_hist.to_csv(index=False).encode('utf-8')
         col_dl, _ = st.columns([1, 3])
         with col_dl:
-            st.download_button(label="📥 Download History (CSV)", data=csv_history, file_name=f"asm_history_{cache_buster}.csv", mime="text/csv", use_container_width=True)
-        st.dataframe(df_hist, use_container_width=True)
+            st.download_button(
+                label="📥 Download Filtered CSV", 
+                data=csv_history, 
+                file_name=f"asm_filtered_history_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", 
+                mime="text/csv", 
+                use_container_width=True
+            )
+        
+        # Display Data
+        st.dataframe(df_hist, use_container_width=True, hide_index=True)
     else:
-        st.info("ℹ️ No archived data found.")
+        st.info("ℹ️ No archived data found matching the selected filters.")
+

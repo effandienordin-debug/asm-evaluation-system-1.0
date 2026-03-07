@@ -67,7 +67,6 @@ def check_auth():
     if st.session_state["authenticated"]:
         return True
 
-    # Check for login errors
     if "login_error" in st.session_state:
         st.error(st.session_state["login_error"])
         if st.button("🔄 Try Again"):
@@ -75,7 +74,6 @@ def check_auth():
             st.rerun()
         st.stop()
 
-    # Process callback
     ms_email = handle_sso_callback()
     if ms_email:
         user_data = conn.query(
@@ -83,7 +81,6 @@ def check_auth():
             params={"e": ms_email.strip()}, 
             ttl=0
         )
-        
         if not user_data.empty:
             st.session_state["authenticated"] = True
             st.session_state["current_user"] = user_data.iloc[0]['name']
@@ -98,22 +95,42 @@ def check_auth():
     tab1, tab2 = st.tabs(["Microsoft SSO", "Local Login"])
     
     with tab1:
-        auth_url = get_auth_url()
-        # SINGLE WINDOW REDIRECT
+        # 1. Generate the URL and verify it's not empty
+        try:
+            auth_url = get_auth_url()
+        except Exception as e:
+            st.error(f"Error generating Auth URL: {e}")
+            auth_url = "#"
+
+        # 2. Updated HTML with a stronger JS redirect and a CSS hover effect
+        # We use window.top.location to break out of the Streamlit iframe
         login_html = f"""
-            <button id="sso-button" onclick="parent.location.href='{auth_url}'" style="
-                width: 100%; background-color: #1E3A8A; color: white; padding: 14px;
-                border: none; border-radius: 8px; cursor: pointer; font-weight: bold;
-                font-size: 16px;
-            ">🚀 Sign in with Microsoft</button>
+            <div style="text-align: center;">
+                <button id="sso-button" 
+                    onclick="window.top.location.href='{auth_url}'" 
+                    style="
+                        width: 100%; background-color: #1E3A8A; color: white; padding: 18px;
+                        border: none; border-radius: 8px; cursor: pointer; font-weight: bold;
+                        font-size: 18px; transition: 0.3s;
+                    ">🚀 Sign in with Microsoft</button>
+                <p style="margin-top: 10px; font-size: 12px; color: #666;">
+                    If the button doesn't respond, <a href="{auth_url}" target="_top">click here to redirect</a>
+                </p>
+            </div>
+            <script>
+                const btn = document.getElementById('sso-button');
+                btn.onmouseover = () => btn.style.backgroundColor = '#2563EB';
+                btn.onmouseout = () => btn.style.backgroundColor = '#1E3A8A';
+            </script>
         """
-        st.components.v1.html(login_html, height=80)
+        st.components.v1.html(login_html, height=150)
 
     with tab2:
         with st.form("local_login"):
             u_name = st.text_input("Evaluator Name")
             u_pass = st.text_input("Password", type="password")
             if st.form_submit_button("Login", use_container_width=True):
+                # Using your logic for local password checking
                 res = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
                 db_pass = res.iloc[0]['value'] if not res.empty else None
                 eval_check = conn.query("SELECT name FROM evaluators WHERE name = :n LIMIT 1", params={"n": u_name}, ttl=0)
@@ -248,3 +265,4 @@ else:
         with st.expander(f"⏳ Remaining ({len(rem)})"):
             for p in rem:
                 st.button(f"📝 Start: {p}", key=f"btn_{p}", use_container_width=True, on_click=nav_to_proposal, args=(p,))
+

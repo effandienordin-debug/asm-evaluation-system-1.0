@@ -7,7 +7,7 @@ from datetime import datetime
 from sqlalchemy import text
 from streamlit_autorefresh import st_autorefresh
 
-# --- 1. CONFIGURATION (STRICT SECRETS) ---
+# --- 1. CONFIGURATION ---
 CLIENT_ID = st.secrets["azure_client_id"]
 CLIENT_SECRET = st.secrets["azure_client_secret"]
 TENANT_ID = st.secrets["azure_tenant_id"]
@@ -46,14 +46,16 @@ def check_auth():
 
     params = st.query_params.to_dict()
     
-    # CALLBACK HANDLING (Returning from Microsoft)
+    # CALLBACK: Handle the return from Microsoft
     if "code" in params:
-        if not st.session_state.get("auth_flow"):
-            st.error("⚠️ Authentication session expired. Please click 'Force Reset' below and try again.")
+        flow = st.session_state.get("auth_flow")
+        if not flow:
+            st.error("⚠️ State Mismatch / Session Expired. Please use 'Force Reset' below.")
         else:
             try:
                 app = get_msal_app()
-                result = app.acquire_token_by_auth_code_flow(st.session_state["auth_flow"], params)
+                # This exchanges the code for a token and validates the 'state'
+                result = app.acquire_token_by_auth_code_flow(flow, params)
                 
                 if "id_token_claims" in result:
                     email = result["id_token_claims"].get("preferred_username").lower().strip()
@@ -65,25 +67,26 @@ def check_auth():
                     if not user_match.empty:
                         st.session_state["authenticated"] = True
                         st.session_state["current_user"] = user_match.iloc[0]['name']
-                        st.session_state["auth_flow"] = None 
+                        st.session_state["auth_flow"] = None # Clear flow on success
                         st.query_params.clear()
                         st.rerun()
                     else:
-                        st.error(f"❌ Access Denied: {email} is not authorized.")
+                        st.error(f"❌ Access Denied: {email} is not in the database.")
                         st.stop()
                 else:
-                    st.error(f"Auth Error: {result.get('error_description', 'Unknown Error')}")
-                    st.stop()
+                    st.error(f"Microsoft Error: {result.get('error_description')}")
+                    st.session_state["auth_flow"] = None # Reset flow to allow retry
             except Exception as e:
-                st.error(f"System Error: {str(e)}")
+                st.error(f"Auth System Error: {str(e)}")
+                st.session_state["auth_flow"] = None
                 st.stop()
 
-    # LOGIN PAGE UI
+    # LOGIN UI
     st.title("🛡️ ASM Evaluator Portal")
     st.info("Authorized Personnel Only")
 
-    # Only generate flow if it doesn't exist (prevents expiration during redirect)
-    if not st.session_state.get("auth_flow"):
+    # STICKY FLOW: Only generate if we don't have one in progress
+    if st.session_state["auth_flow"] is None:
         try:
             app = get_msal_app()
             st.session_state["auth_flow"] = app.initiate_auth_code_flow(["User.Read"], redirect_uri=REDIRECT_URI)
@@ -93,14 +96,14 @@ def check_auth():
 
     auth_url = st.session_state["auth_flow"].get("auth_uri")
 
-    # Main SSO Button
+    # The "Breakout" Button
     st.markdown(
         f"""
-        <div style="text-align: center; margin-top: 30px;">
+        <div style="text-align: center; margin-top: 50px;">
             <a href="{auth_url}" target="_top" style="
                 text-decoration: none; background-color: #1E3A8A; color: white; 
-                padding: 20px 40px; border-radius: 10px; font-weight: bold; 
-                font-size: 20px; display: inline-block; box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+                padding: 25px 50px; border-radius: 12px; font-weight: bold; 
+                font-size: 24px; display: inline-block; box-shadow: 0 4px 15px rgba(0,0,0,0.3);
             ">🚀 SIGN IN WITH MICROSOFT</a>
         </div>
         """,
@@ -108,18 +111,13 @@ def check_auth():
     )
     
     st.divider()
-    
-    col_reset, col_admin = st.columns(2)
-    
-    with col_reset:
-        with st.expander("🛠️ Connection Issues?"):
-            st.write("If you see 'Session Expired' or the button does nothing, use this:")
-            if st.button("🔄 Force Reset Connection", use_container_width=True):
-                st.session_state.clear()
-                st.query_params.clear()
-                st.rerun()
-
-    with col_admin:
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("🔄 Force Reset Connection", use_container_width=True):
+            st.session_state["auth_flow"] = None
+            st.query_params.clear()
+            st.rerun()
+    with col_b:
         with st.expander("🔑 Admin/Local Login"):
             with st.form("local_login"):
                 u_name = st.text_input("Name")
@@ -136,14 +134,14 @@ def check_auth():
 # --- 4. EXECUTE AUTH ---
 check_auth()
 
-# --- 5. LOGOUT HANDLER ---
+# --- 5. LOGOUT ---
 if st.sidebar.button("🚪 Logout", use_container_width=True):
     logout_url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/logout?post_logout_redirect_uri={REDIRECT_URI}"
     st.session_state.clear()
     st.markdown(f'<meta http-equiv="refresh" content="0;URL=\'{logout_url}\'">', unsafe_allow_html=True)
     st.stop()
 
-# --- 6. MAIN APPLICATION CONTENT ---
+# --- 6. APP CONTENT ---
 current_user = st.session_state["current_user"]
 st_autorefresh(interval=30000, key="evaluator_heartbeat")
 
@@ -163,7 +161,6 @@ def get_cloud_list(table, column):
 
 PROPOSALS = get_cloud_list("proposals", "title")
 
-# Header Section
 col_img, col_txt = st.columns([1, 4])
 with col_img:
     img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{current_user.replace(' ', '_')}.png"
@@ -172,7 +169,6 @@ with col_img:
 with col_txt:
     st.title(f"Welcome, {current_user}")
 
-# Progress Section
 try:
     scored_df = conn.query("SELECT proposal_title, total, recommendation, comments FROM scores WHERE evaluator = :ev", params={"ev": current_user}, ttl=0)
     completed_proposals = scored_df['proposal_title'].tolist() if not scored_df.empty else []
@@ -184,7 +180,6 @@ st.write(f"**Progress: {len(completed_proposals)} / {len(PROPOSALS)} Proposals**
 st.progress(len(completed_proposals) / len(PROPOSALS) if PROPOSALS else 0)
 st.divider()
 
-# Selection Logic
 if "proposal_selector" not in st.session_state:
     st.session_state.proposal_selector = "-- Select --"
 

@@ -138,10 +138,10 @@ if not df.empty:
                 raw_comment = str(row.get('comments', '-')) if pd.notnull(row.get('comments')) else "-"
                 
                 # Logic to convert newline-separated text into bullet points
-                if raw_comment != "":
+                if raw_comment != "-":
                     # Split by newlines and wrap in <p> tags with a dash
                     lines = raw_comment.split('\n')
-                    formatted_comment = "".join([f"<p>- {line.strip()}</p>" for line in lines if line.strip()])
+                    formatted_comment = "".join([f"<p> {line.strip()}</p>" for line in lines if line.strip()])
                     comment_html = f"<div class='comment-bubble'>{formatted_comment}</div>"
                 else:
                     comment_html = "-"
@@ -165,6 +165,7 @@ if not df.empty:
 else:
     st.title("📊 Live Evaluation Dashboard")
     st.info("Awaiting submissions...")
+
 
 
 

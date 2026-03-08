@@ -21,6 +21,11 @@ st.markdown("""
         margin-bottom: 10px;
         font-weight: bold;
     }
+    /* This helps ensure the dataframe cells allow for more vertical space */
+    [data-testid="stDataFrame"] div[class*="st-"] {
+        white-space: normal !important;
+        word-wrap: break-word !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -42,13 +47,11 @@ if auto_refresh:
     st_autorefresh(interval=10000, key="dashrefresh")
 
 # --- LIVE EVALUATION CONTENT ---
-# Fetch from SQL
 df = conn.query("SELECT * FROM scores;", ttl=0)
 
 if not df.empty:
     st.title("📊 Live Evaluation Dashboard")
     
-    # Get unique proposals
     unique_proposals = df['proposal_title'].unique()
     
     for proposal in unique_proposals:
@@ -85,29 +88,27 @@ if not df.empty:
             fig_radar.update_layout(template="plotly_white", polar=dict(radialaxis=dict(range=[0, 5])))
             st.plotly_chart(fig_radar, use_container_width=True, key=f"radar_{proposal}")
 
-        # 3. Table with Adjusted Comments Section
-        with st.expander(f"View Raw Data for {proposal}"):
+        # 3. Table with Multi-line Comment Support
+        with st.expander(f"View Raw Data for {proposal}", expanded=True):
             display_cols = ['evaluator'] + CRITERIA_COLS + ['total', 'recommendation']
             
-            # Setup column configuration for better readability
+            # Setup column configuration
             col_config = {
-                "evaluator": st.column_config.TextColumn("Evaluator", width="medium"),
-                "total": st.column_config.NumberColumn("Total", format="%.2f"),
-                "recommendation": st.column_config.TextColumn("Recommendation")
+                "evaluator": st.column_config.TextColumn("Evaluator", width="small"),
+                "total": st.column_config.NumberColumn("Total", format="%.2f", width="small"),
+                "recommendation": st.column_config.TextColumn("Rec.", width="small")
             }
 
             if 'comments' in prop_df.columns:
                 display_cols.append('comments')
-                # Make the comments column wide and enable text wrapping
+                # We use "large" width for comments to give it maximum room
                 col_config["comments"] = st.column_config.TextColumn(
                     "Evaluator Comments", 
-                    width="large",
-                    help="Full justification from the evaluator"
+                    width="large"
                 )
-            else:
-                st.warning("⚠️ Note: 'comments' column not found in database.")
-                
-            # Render the dataframe with the specific column configuration
+            
+            # Note: st.dataframe will show text, but for massive comments 
+            # to be fully visible without interaction, we use use_container_width
             st.dataframe(
                 prop_df[display_cols], 
                 hide_index=True, 
@@ -118,4 +119,4 @@ if not df.empty:
         st.divider()
 else:
     st.title("📊 Live Evaluation Dashboard")
-    st.info("Awaiting submissions from evaluators. Data will appear here once the first review is submitted.")
+    st.info("Awaiting submissions from evaluators.")

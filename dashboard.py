@@ -12,7 +12,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="ASM Result Dashboard", layout="wide")
 
-# --- 2. CSS STYLES (Updated for better text wrapping) ---
+# --- 2. CSS STYLES ---
 st.markdown("""
     <style>
     .stApp { background-color: #FFFFFF !important; color: #000000 !important; }
@@ -32,7 +32,6 @@ st.markdown("""
     }
     .comment-bubble { background-color: #f0f2f6; border-radius: 10px; padding: 12px; margin: 2px 0; font-size: 13px; }
     
-    /* Specific column widths for the web table */
     .col-eval { width: 12%; }
     .col-crit { width: 7%; text-align: center; }
     .col-total { width: 6%; text-align: center; font-weight: bold; }
@@ -124,47 +123,51 @@ def generate_pdf(dataframe, criteria_cols):
     buffer.seek(0)
     return buffer
 
-# --- 4. DATABASE & SESSION STATE ---
+# --- 4. DATABASE & AUTHENTICATION CHECK ---
 conn = st.connection("postgresql", type="sql")
 CRITERIA_COLS = ['strategic_alignment', 'potential_impact', 'feasibility', 'budget_justification', 'timeline_readiness', 'execution_strategy']
 
 if "admin_authenticated" not in st.session_state:
     st.session_state["admin_authenticated"] = False
 
-# --- 5. SIDEBAR: ADMIN ACCESS ---
-with st.sidebar:
-    st.title("🔐 Admin Controls")
-    
-    if not st.session_state["admin_authenticated"]:
-        admin_pass_input = st.text_input("Enter Admin Password", type="password")
-        if st.button("Login", type="primary", use_container_width=True):
+# --- 5. LOGIN SCREEN ---
+if not st.session_state["admin_authenticated"]:
+    st.title("🔐 ASM Dashboard Login")
+    with st.container():
+        st.write("Please enter the administrator password to view results.")
+        admin_pass_input = st.text_input("Password", type="password")
+        if st.button("Access Dashboard", type="primary"):
             if admin_pass_input == "asm_admin_pass":
                 st.session_state["admin_authenticated"] = True
                 st.rerun()
             else:
                 st.error("Incorrect Password")
-    else:
-        st.success("Admin Access Granted")
-        if st.button("🔓 Logout Admin", use_container_width=True):
-            st.session_state["admin_authenticated"] = False
-            st.rerun()
-        st.divider()
-        
-        all_data = conn.query("SELECT * FROM scores ORDER BY proposal_title ASC;", ttl=0)
-        if not all_data.empty:
-            try:
-                pdf_file = generate_pdf(all_data, CRITERIA_COLS)
-                st.download_button(
-                    label="📥 Download Full PDF (incl. Comments)",
-                    data=pdf_file,
-                    file_name=f"ASM_Full_Results_{datetime.now().strftime('%Y%m%d')}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True
-                )
-            except Exception as e:
-                st.error(f"Error: {e}")
+    st.stop()  # Stop execution here if not logged in
 
-# --- 6. DASHBOARD UI ---
+# --- 6. AUTHENTICATED SIDEBAR ---
+with st.sidebar:
+    st.title("⚙️ Admin Panel")
+    st.success("Access Granted")
+    if st.button("🔓 Logout Admin", use_container_width=True):
+        st.session_state["admin_authenticated"] = False
+        st.rerun()
+    
+    st.divider()
+    all_data = conn.query("SELECT * FROM scores ORDER BY proposal_title ASC;", ttl=0)
+    if not all_data.empty:
+        try:
+            pdf_file = generate_pdf(all_data, CRITERIA_COLS)
+            st.download_button(
+                label="📥 Download Full PDF",
+                data=pdf_file,
+                file_name=f"ASM_Full_Results_{datetime.now().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+        except Exception as e:
+            st.error(f"Error: {e}")
+
+# --- 7. DASHBOARD UI (Main Content) ---
 col_ref1, col_ref2 = st.columns([6, 1])
 with col_ref2:
     auto_refresh = st.toggle("🔄 Auto", value=True)
@@ -191,13 +194,11 @@ if not df.empty:
         c1, c2 = st.columns([1, 1])
         with c1:
             fig_bar = px.bar(prop_df, x='evaluator', y='total', range_y=[0,5], title="Scores", color='total', color_continuous_scale='GnBu')
-            # FIX: Added unique key for Plotly Chart
             st.plotly_chart(fig_bar, use_container_width=True, key=f"bar_{proposal}")
         with c2:
             avg_crit = prop_df[CRITERIA_COLS].mean()
             fig_radar = go.Figure(data=go.Scatterpolar(r=avg_crit.values, theta=[c.replace('_', ' ').title() for c in CRITERIA_COLS], fill='toself', line_color='#1E3A8A'))
             fig_radar.update_layout(polar=dict(radialaxis=dict(range=[0, 5])))
-            # FIX: Added unique key for Plotly Chart
             st.plotly_chart(fig_radar, use_container_width=True, key=f"radar_{proposal}")
 
         with st.expander(f"View Detailed Reviews for {proposal}", expanded=True):
@@ -208,7 +209,6 @@ if not df.empty:
                 raw_comm = str(row.get('comments', '-'))
                 formatted_comment = "".join([f"<p> {line.strip()}</p>" for line in raw_comm.split('\n') if line.strip()])
                 
-                # Table row with specific CSS classes for wrapping and alignment
                 table_html += f"""
                 <tr>
                     <td class='col-eval'><b>{row['evaluator']}</b></td>

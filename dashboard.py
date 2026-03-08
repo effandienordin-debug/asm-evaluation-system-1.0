@@ -42,7 +42,7 @@ if auto_refresh:
     st_autorefresh(interval=10000, key="dashrefresh")
 
 # --- LIVE EVALUATION CONTENT ---
-# Fetch from SQL instead of CSV
+# Fetch from SQL
 df = conn.query("SELECT * FROM scores;", ttl=0)
 
 if not df.empty:
@@ -54,7 +54,7 @@ if not df.empty:
     for proposal in unique_proposals:
         prop_df = df[df['proposal_title'] == proposal].copy()
         
-        # Header - FIXED SYNTAX HERE
+        # Header
         st.markdown(f"<div class='proposal-header'>📂 Proposal: {proposal}</div>", unsafe_allow_html=True)
         
         # 1. Metrics
@@ -69,7 +69,6 @@ if not df.empty:
         c1, c2 = st.columns([1, 1])
         
         with c1:
-            # Bar chart using evaluator names
             fig_bar = px.bar(prop_df, x='evaluator', y='total', range_y=[0,5], 
                              title=f"Total Scores for {proposal}",
                              color='total', color_continuous_scale='GnBu')
@@ -77,7 +76,6 @@ if not df.empty:
             st.plotly_chart(fig_bar, use_container_width=True, key=f"bar_{proposal}")
 
         with c2:
-            # Radar chart for criteria averages
             avg_crit = prop_df[CRITERIA_COLS].mean()
             fig_radar = go.Figure(data=go.Scatterpolar(
                 r=avg_crit.values, 
@@ -87,10 +85,17 @@ if not df.empty:
             fig_radar.update_layout(template="plotly_white", polar=dict(radialaxis=dict(range=[0, 5])))
             st.plotly_chart(fig_radar, use_container_width=True, key=f"radar_{proposal}")
 
-        # 3. Table
+        # 3. Table with Updated Column Name 'comments'
         with st.expander(f"View Raw Data for {proposal}"):
-            # Added 'justification' to the list below
-            display_cols = ['evaluator'] + CRITERIA_COLS + ['total', 'recommendation', 'justification']
+            # Build display columns
+            display_cols = ['evaluator'] + CRITERIA_COLS + ['total', 'recommendation']
+            
+            # Check for the 'comments' column instead of 'justification'
+            if 'comments' in prop_df.columns:
+                display_cols.append('comments')
+            else:
+                st.warning("⚠️ Note: 'comments' column not found in database.")
+                
             st.dataframe(prop_df[display_cols], hide_index=True)
         
         st.divider()

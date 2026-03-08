@@ -153,7 +153,7 @@ if selected_proposal != "-- Select --":
                 inputs[name] = st.number_input(f"{name} ({int(weight*100)}%)", 0.0, 5.0, val, 0.1)
             
             clean_comm = re.sub(r"\[MERGE WITH:.*?\] ", "", str(existing_data['comments']) if existing_data is not None else "")
-            user_comments = st.text_area("Justification", value=clean_comm)
+            user_comments = st.text_area("Comments", value=clean_comm)
             recom_options = ["Pending", "Approve", "Revise", "Reject", "Combine/Merge"]
             cur_rec = str(existing_data['recommendation']) if existing_data is not None else "Pending"
             recom = st.radio("Recommendation", recom_options, index=recom_options.index(cur_rec) if cur_rec in recom_options else 0, horizontal=True)
@@ -188,3 +188,4 @@ else:
         with st.expander(f"⏳ Pending Evaluations ({len(rem)})"):
             for p in rem:
                 st.button(f"📝 Start Scoring: {p}", key=f"btn_{p}", use_container_width=True, on_click=nav_to_proposal, args=(p,))
+

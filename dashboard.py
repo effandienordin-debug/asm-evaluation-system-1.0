@@ -156,12 +156,31 @@ CRITERIA_COLS = ['strategic_alignment', 'potential_impact', 'feasibility', 'budg
 # --- SIDEBAR: ADMIN ACCESS ---
 with st.sidebar:
     st.title("🔐 Admin Controls")
-    admin_password = st.text_input("Enter Admin Password", type="password")
-    # THE PASSWORD LINKED:
-    is_admin = (admin_password == "asm_admin_pass") 
     
-    if is_admin:
+    # Check if admin is already authenticated in session state
+    if "admin_authenticated" not in st.session_state:
+        st.session_state["admin_authenticated"] = False
+
+    if not st.session_state["admin_authenticated"]:
+        admin_password = st.text_input("Enter Admin Password", type="password")
+        if st.button("Login", type="primary"):
+            if admin_password == "asm_admin_pass":
+                st.session_state["admin_authenticated"] = True
+                st.rerun()
+            else:
+                st.error("Incorrect Password")
+    else:
+        # --- ADMIN IS LOGGED IN ---
         st.success("Admin Access Granted")
+        
+        # Logout Button
+        if st.button("🔓 Logout Admin"):
+            st.session_state["admin_authenticated"] = False
+            st.rerun()
+            
+        st.divider()
+        
+        # PDF Download logic remains here
         all_data = conn.query("SELECT * FROM scores;", ttl=0)
         if not all_data.empty:
             try:
@@ -260,3 +279,4 @@ if not df.empty:
 else:
     st.title("📊 Live Evaluation Dashboard")
     st.info("Awaiting submissions...")
+

@@ -17,7 +17,7 @@ cache_buster = datetime.now().strftime("%Y%m%d%H%M%S")
 # Standard Blank User Icon URL
 BLANK_ICON = "https://cdn-icons-png.flaticon.com/512/149/149071.png"
 
-# Initialize Cookie Manager SAFELY
+# Initialize Cookie Manager SAFELY (No @st.cache to avoid Widget Warning)
 try:
     cookie_manager = stx.CookieManager(key="main_cookie_manager")
 except Exception:
@@ -255,8 +255,9 @@ with st.sidebar:
     menu_options = ["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"]
     if st.session_state.get("user_role") == "SuperAdmin": menu_options.append("🔑 User Management")
     
-    # We use a key here to ensure the radio button state is tracked correctly
-    menu_choice = st.radio("Go to Section:", menu_options, key="navigation_radio")
+    # ADDED KEY FOR STATE TRACKING
+    menu_choice = st.radio("Go to Section:", menu_options, key="admin_nav_radio")
+    
     st.divider()
     st.subheader("⚙️ Settings")
     auto_refresh = st.toggle("🔄 Auto Refresh (10s)", value=False)
@@ -270,11 +271,12 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-# --- 6. MAIN CONTENT ---
-# We clear the previous content visually using a container
-main_container = st.container()
+# --- 6. MAIN CONTENT WRAPPER ---
+# Using st.empty() as a container ensures that when menu_choice changes, 
+# the entire previous view is "flushed" from the UI.
+main_view = st.empty()
 
-with main_container:
+with main_view.container():
     if menu_choice == "📊 Tracker":
         st.header("📊 Live Proposal Progress")
         df_scores = conn.query("SELECT * FROM scores;", ttl=0)

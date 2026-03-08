@@ -25,37 +25,41 @@ if "current_user" not in st.session_state:
 if "user_email" not in st.session_state:
     st.session_state["user_email"] = None
 
-# --- 3. ACCESS CONTROL SCREEN ---
+# --- 3. ACCESS CONTROL SCREEN (Dual Column Lookup) ---
 if not st.session_state["user_email"]:
     st.title("🛡️ ASM Evaluator Access")
-    st.markdown("### Please enter your registered email to proceed.")
+    st.markdown("### Identify yourself to access the evaluation portal.")
     
-    input_email = st.text_input("Registered Email", placeholder="name@organization.com").lower().strip()
+    input_email = st.text_input("Enter Registered Email", placeholder="name@organization.com").lower().strip()
     
     if st.button("Access System", type="primary", use_container_width=True):
         if input_email:
-            # Query DB to check if email exists in sso_email column
+            # Query DB to check if email exists in EITHER sso_email OR email columns
             user_check = conn.query(
-                "SELECT name FROM evaluators WHERE LOWER(sso_email) = :e LIMIT 1", 
+                """
+                SELECT name FROM evaluators 
+                WHERE LOWER(sso_email) = :e 
+                OR LOWER(email) = :e 
+                LIMIT 1
+                """, 
                 params={"e": input_email}, ttl=0
             )
             
             if not user_check.empty:
-                # Success: Set session state and refresh
+                # Success: Capture the display name and the email used
                 st.session_state["user_email"] = input_email
                 st.session_state["current_user"] = user_check.iloc[0]['name']
-                st.success(f"Access Granted. Welcome, {st.session_state['current_user']}!")
+                st.success(f"Verified! Welcome, {st.session_state['current_user']}.")
                 time.sleep(1)
                 st.rerun()
             else:
-                st.error("❌ Access Denied: This email is not registered in the authorized evaluator database.")
+                st.error("❌ Access Denied: This email is not found in our records.")
         else:
             st.warning("⚠️ Please enter an email address.")
     
-    # Simple footer for the login page
     st.divider()
-    st.caption("Technical issues? Please contact the ASM Administrator.")
-    st.stop() # Prevents the rest of the app from loading until verified
+    st.caption("Authorized Use Only. System access is monitored.")
+    st.stop() 
 
 # --- 4. AUTHORIZED APP CONTENT ---
 current_user = st.session_state["current_user"]
@@ -63,17 +67,17 @@ user_email = st.session_state["user_email"]
 
 st_autorefresh(interval=30000, key="evaluator_heartbeat")
 
-# Sidebar for User Info & Logout
+# Sidebar
 with st.sidebar:
-    st.write(f"**Logged in as:**")
+    st.write(f"**Current Evaluator:**")
     st.subheader(current_user)
     st.caption(user_email)
     st.divider()
-    if st.button("🚪 Logout / Change User", use_container_width=True):
+    if st.button("🚪 Logout / Switch User", use_container_width=True):
         st.session_state.clear()
         st.rerun()
 
-# Navigation helper functions
+# --- 5. LOGIC HELPERS ---
 def nav_to_summary():
     st.session_state.proposal_selector = "-- Select --"
     st.session_state.is_editing = False
@@ -90,10 +94,10 @@ def get_cloud_list(table, column):
 
 PROPOSALS = get_cloud_list("proposals", "title")
 
-# Profile Header
+# --- 6. USER INTERFACE ---
 col_img, col_txt = st.columns([1, 4])
 with col_img:
-    # Logic to fetch photo from Supabase
+    # Avatar detection
     img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{current_user.replace(' ', '_')}.png"
     st.markdown(f'''
         <div style="text-align: center;">
@@ -103,7 +107,7 @@ with col_img:
     ''', unsafe_allow_html=True)
 
 with col_txt:
-    st.title(f"Evaluator Portal: {current_user}")
+    st.title(f"Evaluator Portal")
 
 # Progress Data
 try:
@@ -113,15 +117,15 @@ except:
     scored_df = pd.DataFrame()
     completed_proposals = []
 
-st.write(f"**Overall Progress: {len(completed_proposals)} / {len(PROPOSALS)} Proposals**")
+st.write(f"**Your Progress: {len(completed_proposals)} / {len(PROPOSALS)} Proposals**")
 st.progress(len(completed_proposals) / len(PROPOSALS) if PROPOSALS else 0)
 st.divider()
 
-# Proposal Selector
+# Selection Logic
 if "proposal_selector" not in st.session_state:
     st.session_state.proposal_selector = "-- Select --"
 
-selected_proposal = st.selectbox("Select Proposal to Evaluate", ["-- Select --"] + PROPOSALS, key="proposal_selector")
+selected_proposal = st.selectbox("Choose Proposal", ["-- Select --"] + PROPOSALS, key="proposal_selector")
 
 if selected_proposal != "-- Select --":
     query = "SELECT * FROM scores WHERE evaluator = :ev AND proposal_title = :prop LIMIT 1;"
@@ -132,16 +136,16 @@ if selected_proposal != "-- Select --":
         st.session_state.is_editing = False
 
     if existing_data is not None and not st.session_state.is_editing:
-        st.success(f"✅ Record found for: {selected_proposal}")
-        st.metric("Total Score", f"{existing_data['total']} / 5.0")
+        st.success(f"✅ Submission Received")
+        st.metric("Your Total Score", f"{existing_data['total']} / 5.0")
         c1, c2 = st.columns(2)
         if c1.button("✏️ Edit Record", use_container_width=True):
             st.session_state.is_editing = True
             st.rerun()
-        c2.button("⬅️ Back to Summary", use_container_width=True, on_click=nav_to_summary)
+        c2.button("⬅️ Summary View", use_container_width=True, on_click=nav_to_summary)
     else:
         with st.form("eval_form"):
-            st.subheader(f"Evaluating: {selected_proposal}")
+            st.subheader(f"Evaluation: {selected_proposal}")
             inputs = {}
             for name, weight in CRITERIA:
                 col_db = name.lower().replace(" ", "_")
@@ -149,7 +153,7 @@ if selected_proposal != "-- Select --":
                 inputs[name] = st.number_input(f"{name} ({int(weight*100)}%)", 0.0, 5.0, val, 0.1)
             
             clean_comm = re.sub(r"\[MERGE WITH:.*?\] ", "", str(existing_data['comments']) if existing_data is not None else "")
-            user_comments = st.text_area("Comments", value=clean_comm)
+            user_comments = st.text_area("Justification", value=clean_comm)
             recom_options = ["Pending", "Approve", "Revise", "Reject", "Combine/Merge"]
             cur_rec = str(existing_data['recommendation']) if existing_data is not None else "Pending"
             recom = st.radio("Recommendation", recom_options, index=recom_options.index(cur_rec) if cur_rec in recom_options else 0, horizontal=True)
@@ -159,7 +163,7 @@ if selected_proposal != "-- Select --":
                 other_proposals = [p for p in PROPOSALS if p != selected_proposal]
                 merge_target = st.selectbox("Merge with:", other_proposals)
 
-            if st.form_submit_button("📤 Submit Evaluation", type="primary"):
+            if st.form_submit_button("📤 Save Evaluation", type="primary"):
                 w_sum = sum(inputs[name] * weight for name, weight in CRITERIA)
                 final_total = round(w_sum, 2)
                 final_comm = f"[MERGE WITH: {merge_target}] {user_comments}" if recom == "Combine/Merge" else user_comments
@@ -175,7 +179,7 @@ if selected_proposal != "-- Select --":
                     s.commit()
                 st.success("Evaluation Saved!"); time.sleep(1); st.rerun()
 else:
-    st.subheader("📊 Your Evaluation Summary")
+    st.subheader("📊 Submitted Scores")
     if not scored_df.empty:
         st.dataframe(scored_df[["proposal_title", "total", "recommendation"]], use_container_width=True, hide_index=True)
     

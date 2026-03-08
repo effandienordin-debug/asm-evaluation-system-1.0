@@ -24,8 +24,10 @@ if "current_user" not in st.session_state:
     st.session_state["current_user"] = None
 if "user_email" not in st.session_state:
     st.session_state["user_email"] = None
+if "selected_proposal" not in st.session_state:
+    st.session_state["selected_proposal"] = None
 
-# --- 3. ACCESS CONTROL SCREEN (Dual Column Lookup) ---
+# --- 3. ACCESS CONTROL SCREEN ---
 if not st.session_state["user_email"]:
     st.title("🛡️ ASM Evaluator Access")
     st.markdown("### Identify yourself to access the evaluation portal.")
@@ -34,7 +36,6 @@ if not st.session_state["user_email"]:
     
     if st.button("Access System", type="primary", use_container_width=True):
         if input_email:
-            # Query DB to check if email exists in EITHER sso_email OR email columns
             user_check = conn.query(
                 """
                 SELECT name FROM evaluators 
@@ -46,7 +47,6 @@ if not st.session_state["user_email"]:
             )
             
             if not user_check.empty:
-                # Success: Capture the display name and the email used
                 st.session_state["user_email"] = input_email
                 st.session_state["current_user"] = user_check.iloc[0]['name']
                 st.success(f"Verified! Welcome, {st.session_state['current_user']}.")
@@ -61,131 +61,116 @@ if not st.session_state["user_email"]:
     st.caption("Authorized Use Only. System access is monitored.")
     st.stop() 
 
-# --- 4. AUTHORIZED APP CONTENT ---
-current_user = st.session_state["current_user"]
-user_email = st.session_state["user_email"]
+# --- 4. MAIN NAVIGATION (Proposal List) ---
+evaluator_name = st.session_state["current_user"]
 
-st_autorefresh(interval=30000, key="evaluator_heartbeat")
+if not st.session_state["selected_proposal"]:
+    st.title(f"👋 Welcome, {evaluator_name}")
+    st.subheader("Your Proposal Assignments")
+    
+    # Fetch proposals and check which ones this specific evaluator has finished
+    proposals = conn.query("SELECT title FROM proposals ORDER BY title ASC;", ttl=0)
+    existing_scores = conn.query(
+        "SELECT proposal_title FROM scores WHERE evaluator = :name", 
+        params={"name": evaluator_name}, ttl=0
+    )
+    done_proposals = existing_scores['proposal_title'].tolist() if not existing_scores.empty else []
 
-# Sidebar
-with st.sidebar:
-    st.write(f"**Current Evaluator:**")
-    st.subheader(current_user)
-    st.caption(user_email)
-    st.divider()
-    if st.button("🚪 Logout / Switch User", use_container_width=True):
+    # UI for the List
+    for _, row in proposals.iterrows():
+        title = row['title']
+        col1, col2, col3 = st.columns([0.6, 0.2, 0.2])
+        
+        col1.write(f"**📄 {title}**")
+        
+        # Status Badge Logic
+        if title in done_proposals:
+            col2.markdown(" :green[✅ Completed] ")
+            if col3.button("Edit Review", key=f"edit_{title}", use_container_width=True):
+                st.session_state["selected_proposal"] = title
+                st.rerun()
+        else:
+            col2.markdown(" :blue[📝 Pending] ")
+            if col3.button("Evaluate", key=f"eval_{title}", type="primary", use_container_width=True):
+                st.session_state["selected_proposal"] = title
+                st.rerun()
+        st.divider()
+    
+    if st.button("Logout"):
         st.session_state.clear()
         st.rerun()
+    st.stop()
 
-# --- 5. LOGIC HELPERS ---
-def nav_to_summary():
-    st.session_state.proposal_selector = "-- Select --"
-    st.session_state.is_editing = False
+# --- 5. EVALUATION FORM ---
+proposal_title = st.session_state["selected_proposal"]
+st.title(f"Evaluation Form")
+st.info(f"**Current Project:** {proposal_title}")
 
-def nav_to_proposal(title):
-    st.session_state.proposal_selector = title
-    st.session_state.is_editing = False
+# Fetch existing data if we are editing
+existing_data = conn.query(
+    "SELECT * FROM scores WHERE evaluator = :e AND proposal_title = :p",
+    params={"e": evaluator_name, "p": proposal_title}, ttl=0
+)
 
-def get_cloud_list(table, column):
-    try:
-        df = conn.query(f"SELECT {column} FROM {table} ORDER BY {column} ASC;", ttl=0)
-        return df[column].tolist() if not df.empty else []
-    except: return []
-
-PROPOSALS = get_cloud_list("proposals", "title")
-
-# --- 6. USER INTERFACE ---
-col_img, col_txt = st.columns([1, 4])
-with col_img:
-    # Avatar detection
-    img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{current_user.replace(' ', '_')}.png"
-    st.markdown(f'''
-        <div style="text-align: center;">
-            <img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; border: 3px solid #1E3A8A;" 
-            onerror="this.src='https://ui-avatars.com/api/?name={current_user}&background=random'">
-        </div>
-    ''', unsafe_allow_html=True)
-
-with col_txt:
-    st.title(f"Evaluator Portal")
-
-# Progress Data
-try:
-    scored_df = conn.query("SELECT proposal_title, total, recommendation, comments FROM scores WHERE evaluator = :ev", params={"ev": current_user}, ttl=0)
-    completed_proposals = scored_df['proposal_title'].tolist() if not scored_df.empty else []
-except:
-    scored_df = pd.DataFrame()
-    completed_proposals = []
-
-st.write(f"**Your Progress: {len(completed_proposals)} / {len(PROPOSALS)} Proposals**")
-st.progress(len(completed_proposals) / len(PROPOSALS) if PROPOSALS else 0)
-st.divider()
-
-# Selection Logic
-if "proposal_selector" not in st.session_state:
-    st.session_state.proposal_selector = "-- Select --"
-
-selected_proposal = st.selectbox("Choose Proposal", ["-- Select --"] + PROPOSALS, key="proposal_selector")
-
-if selected_proposal != "-- Select --":
-    query = "SELECT * FROM scores WHERE evaluator = :ev AND proposal_title = :prop LIMIT 1;"
-    df_match = conn.query(query, params={"ev": current_user, "prop": selected_proposal}, ttl=0)
-    existing_data = df_match.iloc[0] if not df_match.empty else None
-
-    if "is_editing" not in st.session_state:
-        st.session_state.is_editing = False
-
-    if existing_data is not None and not st.session_state.is_editing:
-        st.success(f"✅ Submission Received")
-        st.metric("Your Total Score", f"{existing_data['total']} / 5.0")
-        c1, c2 = st.columns(2)
-        if c1.button("✏️ Edit Record", use_container_width=True):
-            st.session_state.is_editing = True
-            st.rerun()
-        c2.button("⬅️ Summary View", use_container_width=True, on_click=nav_to_summary)
-    else:
-        with st.form("eval_form"):
-            st.subheader(f"Evaluation: {selected_proposal}")
-            inputs = {}
-            for name, weight in CRITERIA:
-                col_db = name.lower().replace(" ", "_")
-                val = float(existing_data[col_db]) if existing_data is not None else 0.0
-                inputs[name] = st.number_input(f"{name} ({int(weight*100)}%)", 0.0, 5.0, val, 0.1)
-            
-            clean_comm = re.sub(r"\[MERGE WITH:.*?\] ", "", str(existing_data['comments']) if existing_data is not None else "")
-            user_comments = st.text_area("Comments", value=clean_comm)
-            recom_options = ["Pending", "Approve", "Revise", "Reject", "Combine/Merge"]
-            cur_rec = str(existing_data['recommendation']) if existing_data is not None else "Pending"
-            recom = st.radio("Recommendation", recom_options, index=recom_options.index(cur_rec) if cur_rec in recom_options else 0, horizontal=True)
-
-            merge_target = None
-            if recom == "Combine/Merge":
-                other_proposals = [p for p in PROPOSALS if p != selected_proposal]
-                merge_target = st.selectbox("Merge with:", other_proposals)
-
-            if st.form_submit_button("📤 Save Evaluation", type="primary"):
-                w_sum = sum(inputs[name] * weight for name, weight in CRITERIA)
-                final_total = round(w_sum, 2)
-                final_comm = f"[MERGE WITH: {merge_target}] {user_comments}" if recom == "Combine/Merge" else user_comments
-                with conn.session as s:
-                    s.execute(text("""INSERT INTO scores (evaluator, proposal_title, strategic_alignment, potential_impact, feasibility, budget_justification, timeline_readiness, execution_strategy, total, recommendation, comments, last_updated)
-                        VALUES (:ev, :prop, :s1, :s2, :s3, :s4, :s5, :s6, :tot, :rec, :comm, :ts)
-                        ON CONFLICT (evaluator, proposal_title) DO UPDATE SET 
-                        strategic_alignment=EXCLUDED.strategic_alignment, potential_impact=EXCLUDED.potential_impact,
-                        feasibility=EXCLUDED.feasibility, budget_justification=EXCLUDED.budget_justification,
-                        timeline_readiness=EXCLUDED.timeline_readiness, execution_strategy=EXCLUDED.execution_strategy,
-                        total=EXCLUDED.total, recommendation=EXCLUDED.recommendation, comments=EXCLUDED.comments, last_updated=EXCLUDED.last_updated"""),
-                        {"ev": current_user, "prop": selected_proposal, "s1": inputs['Strategic Alignment'], "s2": inputs['Potential Impact'], "s3": inputs['Feasibility'], "s4": inputs['Budget Justification'], "s5": inputs['Timeline Readiness'], "s6": inputs['Execution Strategy'], "tot": final_total, "rec": recom, "comm": final_comm, "ts": datetime.now()})
-                    s.commit()
-                st.success("Evaluation Saved!"); time.sleep(1); st.rerun()
-else:
-    st.subheader("📊 Submitted Scores")
-    if not scored_df.empty:
-        st.dataframe(scored_df[["proposal_title", "total", "recommendation"]], use_container_width=True, hide_index=True)
+with st.form("evaluation_form", clear_on_submit=False):
+    st.markdown("### Scoring Criteria")
+    scores = {}
+    for label, weight in CRITERIA:
+        # Convert column name for DB lookup (e.g., 'Strategic Alignment' -> 'strategic_alignment')
+        db_col = label.lower().replace(' ', '_')
+        default_val = float(existing_data.iloc[0][db_col]) if not existing_data.empty else 3.0
+        scores[label] = st.slider(f"{label} (Weight: {int(weight*100)}%)", 1.0, 5.0, default_val, 0.5)
     
-    rem = [p for p in PROPOSALS if p not in completed_proposals]
-    if rem:
-        with st.expander(f"⏳ Pending Evaluations ({len(rem)})"):
-            for p in rem:
-                st.button(f"📝 Start Scoring: {p}", key=f"btn_{p}", use_container_width=True, on_click=nav_to_proposal, args=(p,))
+    st.divider()
+    
+    rec_choices = ["Highly Recommended", "Recommended", "Recommended with Revisions", "Not Recommended"]
+    rec_default = existing_data.iloc[0]['recommendation'] if not existing_data.empty else "Highly Recommended"
+    comm_default = existing_data.iloc[0]['comments'] if not existing_data.empty else ""
+    
+    recommendation = st.selectbox("Overall Recommendation", rec_choices, index=rec_choices.index(rec_default))
+    comments = st.text_area("Justification/Comments", value=comm_default, height=150)
+    
+    # Save and Cancel buttons side-by-side
+    btn_col1, btn_col2 = st.columns([0.2, 0.8])
+    submit = btn_col1.form_submit_button("Save Evaluation", type="primary", use_container_width=True)
+    cancel = btn_col2.form_submit_button("Cancel / Back", use_container_width=False)
 
+# LOGIC FOR CANCEL
+if cancel:
+    st.session_state["selected_proposal"] = None
+    st.rerun()
+
+# LOGIC FOR SUBMIT
+if submit:
+    if not comments.strip():
+        st.error("⚠️ Please provide justification comments before saving.")
+    else:
+        total_score = sum(scores[label] * weight for label, weight in CRITERIA)
+        
+        with conn.session as s:
+            # Upsert logic: Delete old and insert new
+            s.execute(text("DELETE FROM scores WHERE evaluator = :e AND proposal_title = :p"), {"e": evaluator_name, "p": proposal_title})
+            
+            s.execute(text("""
+                INSERT INTO scores (
+                    evaluator, proposal_title, strategic_alignment, potential_impact, 
+                    feasibility, budget_justification, timeline_readiness, execution_strategy, 
+                    total, recommendation, comments
+                ) VALUES (
+                    :eval, :prop, :s1, :s2, :s3, :s4, :s5, :s6, :tot, :rec, :comm
+                )
+            """), {
+                "eval": evaluator_name, "prop": proposal_title,
+                "s1": scores['Strategic Alignment'], "s2": scores['Potential Impact'],
+                "s3": scores['Feasibility'], "s4": scores['Budget Justification'],
+                "s5": scores['Timeline Readiness'], "s6": scores['Execution Strategy'],
+                "tot": total_score, "rec": recommendation, "comm": comments
+            })
+            s.commit()
+        
+        st.success(f"✅ Evaluation for '{proposal_title}' saved successfully!")
+        time.sleep(1.5)
+        
+        # RETURN TO MAIN LIST
+        st.session_state["selected_proposal"] = None
+        st.rerun()

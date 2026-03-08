@@ -55,7 +55,7 @@ if not df.empty:
         prop_df = df[df['proposal_title'] == proposal].copy()
         
         # Header
-        st.markdown(f"<div class='proposal-header'>📂 Proposal: {proposal}</div>", unsafe_allow_html=True)
+        st.markdown(f<div class='proposal-header'>📂 Proposal: {proposal}</div>", unsafe_allow_html=True)
         
         # 1. Metrics
         m1, m2, m3, m4 = st.columns(4)
@@ -89,7 +89,8 @@ if not df.empty:
 
         # 3. Table
         with st.expander(f"View Raw Data for {proposal}"):
-            display_cols = ['evaluator'] + CRITERIA_COLS + ['total', 'recommendation']
+            # Added 'justification' to the list below
+            display_cols = ['evaluator'] + CRITERIA_COLS + ['total', 'recommendation', 'justification']
             st.dataframe(prop_df[display_cols], hide_index=True)
         
         st.divider()

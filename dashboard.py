@@ -84,7 +84,7 @@ def generate_pdf(dataframe, criteria_cols):
 
         # Row 2: The Comment (Spanning across the table)
         raw_comm = str(row.get('comments', 'No comments provided.'))
-        comment_text = f"<b>Justification:</b> {raw_comm}"
+        comment_text = f"<b>Comments:</b> {raw_comm}"
         
         # We create a row where the first cell contains the comment and we will merge it later
         comment_row = [Paragraph(comment_text, comment_style), "", "", "", "", "", "", "", "", ""]
@@ -218,3 +218,4 @@ if not df.empty:
 else:
     st.title("📊 Live Evaluation Dashboard")
     st.info("Awaiting submissions...")
+

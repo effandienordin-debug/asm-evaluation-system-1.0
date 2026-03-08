@@ -27,7 +27,7 @@ st.markdown("""
         border-collapse: collapse;
         font-family: sans-serif;
         font-size: 13px;
-        table-layout: fixed; /* Ensures columns stay proportional */
+        table-layout: fixed;
     }
     .wrapped-table th {
         background-color: #f3f4f6;
@@ -35,7 +35,6 @@ st.markdown("""
         padding: 8px;
         text-align: left;
         color: #1f2937;
-        word-wrap: break-word;
     }
     .wrapped-table td {
         border: 1px solid #e5e7eb;
@@ -45,19 +44,34 @@ st.markdown("""
         white-space: normal !important;
         line-height: 1.4;
     }
+    /* NEW: Styling for the comment bubble from your screenshot */
+    .comment-bubble {
+        background-color: #f0f2f6;
+        border-radius: 10px;
+        padding: 12px;
+        margin: 2px 0;
+        color: #1f2937;
+        font-size: 13px;
+        display: inline-block;
+        width: 100%;
+    }
+    .comment-bubble p {
+        margin: 0;
+        padding: 2px 0;
+    }
+
     /* Column Width Management */
     .col-eval { width: 10%; }
-    .col-crit { width: 7%; text-align: center; }
-    .col-total { width: 6%; font-weight: bold; text-align: center; }
+    .col-crit { width: 6%; text-align: center; }
+    .col-total { width: 5%; font-weight: bold; text-align: center; }
     .col-rec { width: 10%; }
-    .col-comm { width: 25%; }
+    .col-comm { width: 30%; }
     </style>
     """, unsafe_allow_html=True)
 
 # --- Database Connection ---
 conn = st.connection("postgresql", type="sql")
 
-# Define Official Criteria
 CRITERIA_COLS = [
     'strategic_alignment', 'potential_impact', 'feasibility', 
     'budget_justification', 'timeline_readiness', 'execution_strategy'
@@ -66,7 +80,7 @@ CRITERIA_COLS = [
 # --- Auto-Refresh Toggle ---
 col_ref1, col_ref2 = st.columns([6, 1])
 with col_ref2:
-    auto_refresh = st.toggle("🔄 Auto", value=True, help="Refresh every 10 seconds")
+    auto_refresh = st.toggle("🔄 Auto", value=True)
 if auto_refresh:
     from streamlit_autorefresh import st_autorefresh
     st_autorefresh(interval=10000, key="dashrefresh")
@@ -76,19 +90,15 @@ df = conn.query("SELECT * FROM scores;", ttl=0)
 
 if not df.empty:
     st.title("📊 Live Evaluation Dashboard")
-    
     unique_proposals = df['proposal_title'].unique()
     
     for proposal in unique_proposals:
         prop_df = df[df['proposal_title'] == proposal].copy()
-        
-        # Header
         st.markdown(f"<div class='proposal-header'>📂 Proposal: {proposal}</div>", unsafe_allow_html=True)
         
         # 1. Metrics
         m1, m2, m3, m4 = st.columns(4)
-        avg_score = prop_df['total'].mean()
-        m1.metric("Avg Score", f"{avg_score:.2f}")
+        m1.metric("Avg Score", f"{prop_df['total'].mean():.2f}")
         m2.metric("Evaluators", len(prop_df))
         m3.metric("Max Score", f"{prop_df['total'].max():.2f}")
         m4.metric("Min Score", f"{prop_df['total'].min():.2f}")
@@ -96,25 +106,17 @@ if not df.empty:
         # 2. Visuals
         c1, c2 = st.columns([1, 1])
         with c1:
-            fig_bar = px.bar(prop_df, x='evaluator', y='total', range_y=[0,5], 
-                             title=f"Total Scores for {proposal}",
-                             color='total', color_continuous_scale='GnBu')
+            fig_bar = px.bar(prop_df, x='evaluator', y='total', range_y=[0,5], title="Total Scores", color='total', color_continuous_scale='GnBu')
             fig_bar.update_layout(template="plotly_white")
-            st.plotly_chart(fig_bar, use_container_width=True, key=f"bar_{proposal}")
-
+            st.plotly_chart(fig_bar, use_container_width=True)
         with c2:
             avg_crit = prop_df[CRITERIA_COLS].mean()
-            fig_radar = go.Figure(data=go.Scatterpolar(
-                r=avg_crit.values, 
-                theta=[c.replace('_', ' ').title() for c in CRITERIA_COLS], 
-                fill='toself', line_color='#1E3A8A'
-            ))
+            fig_radar = go.Figure(data=go.Scatterpolar(r=avg_crit.values, theta=[c.replace('_', ' ').title() for c in CRITERIA_COLS], fill='toself', line_color='#1E3A8A'))
             fig_radar.update_layout(template="plotly_white", polar=dict(radialaxis=dict(range=[0, 5])))
-            st.plotly_chart(fig_radar, use_container_width=True, key=f"radar_{proposal}")
+            st.plotly_chart(fig_radar, use_container_width=True)
 
-        # 3. Table with All Criteria and Text Wrapping
+        # 3. Table with Screenshot-style Comments
         with st.expander(f"View Detailed Reviews for {proposal}", expanded=True):
-            # Building Header
             header_row = "".join([f"<th class='col-crit'>{c.replace('_', ' ').title()}</th>" for c in CRITERIA_COLS])
             
             table_html = f"""<table class='wrapped-table'>
@@ -130,10 +132,20 @@ if not df.empty:
                             <tbody>"""
             
             for _, row in prop_df.iterrows():
-                # Extract Criteria Scores
                 crit_data = "".join([f"<td class='col-crit'>{row.get(c, 0)}</td>" for c in CRITERIA_COLS])
                 
-                comment_text = row.get('comments', '-') if pd.notnull(row.get('comments')) else "-"
+                # Format comments to look like the screenshot (bullet points in a bubble)
+                raw_comment = str(row.get('comments', '-')) if pd.notnull(row.get('comments')) else "-"
+                
+                # Logic to convert newline-separated text into bullet points
+                if raw_comment != "-":
+                    # Split by newlines and wrap in <p> tags with a dash
+                    lines = raw_comment.split('\n')
+                    formatted_comment = "".join([f"<p>- {line.strip()}</p>" for line in lines if line.strip()])
+                    comment_html = f"<div class='comment-bubble'>{formatted_comment}</div>"
+                else:
+                    comment_html = "-"
+                
                 rec_text = row.get('recommendation', '-') if pd.notnull(row.get('recommendation')) else "-"
                 
                 table_html += f"""
@@ -142,7 +154,7 @@ if not df.empty:
                         {crit_data}
                         <td class='col-total'>{row['total']:.2f}</td>
                         <td class='col-rec'>{rec_text}</td>
-                        <td class='col-comm'>{comment_text}</td>
+                        <td class='col-comm'>{comment_html}</td>
                     </tr>
                 """
             
@@ -152,4 +164,4 @@ if not df.empty:
         st.divider()
 else:
     st.title("📊 Live Evaluation Dashboard")
-    st.info("Awaiting submissions from evaluators.")
+    st.info("Awaiting submissions...")

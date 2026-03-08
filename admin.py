@@ -10,12 +10,19 @@ from supabase import create_client
 from streamlit_autorefresh import st_autorefresh
 import extra_streamlit_components as stx
 
-# Initialize Cookie Manager
-cookie_manager = stx.CookieManager(key="main_cookie_manager")
-
 # --- 1. CONFIG & CONNECTIONS ---
 st.set_page_config(page_title="ASM Admin Panel", layout="wide")
 cache_buster = datetime.now().strftime("%Y%m%d%H%M%S")
+
+# Initialize Cookie Manager safely
+@st.cache_resource
+def get_cookie_manager():
+    try:
+        return stx.CookieManager(key="main_cookie_manager")
+    except:
+        return None
+
+cookie_manager = get_cookie_manager()
 
 # Initialize Session States
 if "authenticated" not in st.session_state:
@@ -64,32 +71,18 @@ def bulk_add_evaluators_dialog():
     **Format:** `Type, Full Name, Nickname, Email`  
     Use **SSO** for staff or **EXT** for external (manual login).
     """)
-
     template_csv = "Type,Full Name,Nickname,Email\nSSO,John Doe,John,john@akademisains.gov.my\nEXT,Jane Smith,Jane,jane@gmail.com"
-    st.download_button(
-        label="📥 Download CSV Template",
-        data=template_csv,
-        file_name="evaluator_bulk_template.csv",
-        mime="text/csv"
-    )
+    st.download_button(label="📥 Download CSV Template", data=template_csv, file_name="evaluator_bulk_template.csv", mime="text/csv")
     st.divider()
-    
-    raw_data = st.text_area(
-        "List of Evaluators", 
-        height=250, 
-        placeholder="SSO, John Doe, John, john@akademisains.gov.my\nEXT, Jane Smith, Jane, jane@gmail.com"
-    )
+    raw_data = st.text_area("List of Evaluators", height=250, placeholder="SSO, John Doe, John, john@akademisains.gov.my\nEXT, Jane Smith, Jane, jane@gmail.com")
     
     if st.button("Import All", type="primary"):
-        # --- FIX: CHECK IF TEXT AREA IS BLANK ---
         if not raw_data.strip():
             st.error("🚨 Please paste evaluator data before importing!")
             return
-
         lines = [line.strip() for line in raw_data.split('\n') if line.strip()]
         count = 0
         error_lines = []
-        
         with conn.session as s:
             for line in lines:
                 parts = [p.strip() for p in line.split(',')]
@@ -98,7 +91,6 @@ def bulk_add_evaluators_dialog():
                     sso_email = email_val if etype == "SSO" else None
                     pers_email = email_val if etype == "EXT" else None
                     pwd = "SSO_USER" if etype == "SSO" else "ASM123!" 
-
                     try:
                         s.execute(text("""
                             INSERT INTO evaluators (name, nickname, email, sso_email, password, has_submitted) 
@@ -111,27 +103,22 @@ def bulk_add_evaluators_dialog():
                 else:
                     error_lines.append(f"Invalid format: {line}")
             s.commit()
-            
         if error_lines:
             st.warning(f"Imported {count} users, but had {len(error_lines)} issues.")
             with st.expander("View Errors"):
                 for err in error_lines: st.write(err)
         else:
             st.success(f"✅ Successfully imported {count} evaluators!")
-        
         time.sleep(1.5); st.rerun()
 
 @st.dialog("📚 Bulk Add Proposals")
 def bulk_add_proposals_dialog():
     st.write("Paste titles below. Separate by **new lines** or **commas**.")
     raw_text = st.text_area("Proposals List", height=200, placeholder="Proposal A\nProposal B")
-    
     if st.button("Add All Proposals", type="primary"):
-        # --- FIX: CHECK IF TEXT AREA IS BLANK ---
         if not raw_text.strip():
             st.error("🚨 Proposal list cannot be empty!")
             return
-
         items = [i.strip() for i in re.split(r'[\n,]+', raw_text) if i.strip()]
         with conn.session as s:
             for title in items:
@@ -172,14 +159,10 @@ def edit_evaluator_dialog(name, nick, email, pwd):
     current_sso = eval_data.iloc[0]['sso_email'] if not eval_data.empty else ""
     new_sso = st.text_input("Microsoft/SSO Email", value=current_sso if current_sso else "")
     new_file = st.file_uploader("Update Photo (Optional)", type=['png', 'jpg'])
-    
     if st.button("Save Changes", type="primary"):
         with conn.session as s:
-            s.execute(text("""
-                UPDATE evaluators 
-                SET nickname = :nk, email = :em, password = :pw, sso_email = :sso
-                WHERE name = :n
-            """), {"nk": new_nick, "em": new_email, "pw": new_pwd, "sso": new_sso, "n": name})
+            s.execute(text("""UPDATE evaluators SET nickname = :nk, email = :em, password = :pw, sso_email = :sso WHERE name = :n"""), 
+                     {"nk": new_nick, "em": new_email, "pw": new_pwd, "sso": new_sso, "n": name})
             s.commit()
         if new_file:
             file_path = f"{name.strip().replace(' ', '_')}.png"
@@ -206,27 +189,31 @@ def add_user_dialog():
 def edit_user_dialog(user_id, username, role):
     new_role = st.selectbox("Update Role", ["Viewer", "Editor", "SuperAdmin"], index=["Viewer", "Editor", "SuperAdmin"].index(role))
     new_pass = st.text_input("Update Password (leave blank to keep current)", type="password")
-    
     if st.button("Save Changes", type="primary"):
         with conn.session as s:
             if new_pass:
-                s.execute(text("UPDATE users SET role = :r, password_hash = :p WHERE id = :id"), 
-                          {"r": new_role, "p": new_pass, "id": user_id})
+                s.execute(text("UPDATE users SET role = :r, password_hash = :p WHERE id = :id"), {"r": new_role, "p": new_pass, "id": user_id})
             else:
-                s.execute(text("UPDATE users SET role = :r WHERE id = :id"), 
-                          {"r": new_role, "id": user_id})
+                s.execute(text("UPDATE users SET role = :r WHERE id = :id"), {"r": new_role, "id": user_id})
             s.commit()
         st.success("User updated!"); time.sleep(1); st.rerun()
 
 # --- 3. LOGIN LOGIC ---
 def check_password():
-    if st.session_state.get("authenticated"): return True
-    saved_user = cookie_manager.get(cookie="asm_admin_user")
-    if saved_user:
-        user_check = conn.query("SELECT username, role FROM users WHERE username = :u", params={"u": saved_user}, ttl=0)
-        if not user_check.empty:
-            st.session_state.update({"authenticated": True, "username": user_check.iloc[0]['username'], "user_role": user_check.iloc[0]['role']})
-            return True
+    if st.session_state.get("authenticated"): 
+        return True
+    
+    # Try to recover session from cookie manager if available
+    if cookie_manager:
+        try:
+            saved_user = cookie_manager.get(cookie="asm_admin_user")
+            if saved_user:
+                user_check = conn.query("SELECT username, role FROM users WHERE username = :u", params={"u": saved_user}, ttl=0)
+                if not user_check.empty:
+                    st.session_state.update({"authenticated": True, "username": user_check.iloc[0]['username'], "user_role": user_check.iloc[0]['role']})
+                    return True
+        except:
+            pass # Silently fail if cookie component isn't ready
     
     st.markdown("<h1 style='text-align: center;'>🛡️ ASM Admin Access</h1>", unsafe_allow_html=True)
     _, center, _ = st.columns([1, 1.5, 1])
@@ -238,7 +225,9 @@ def check_password():
                 user_data = conn.query("SELECT username, password_hash, role FROM users WHERE LOWER(username) = LOWER(:u)", params={"u": u_input}, ttl=0)
                 if not user_data.empty and str(user_data.iloc[0]['password_hash']) == p_input:
                     st.session_state.update({"authenticated": True, "username": user_data.iloc[0]['username'], "user_role": user_data.iloc[0]['role']})
-                    cookie_manager.set("asm_admin_user", user_data.iloc[0]['username'])
+                    if cookie_manager:
+                        try: cookie_manager.set("asm_admin_user", user_data.iloc[0]['username'])
+                        except: pass
                     st.rerun()
                 else: st.error("❌ Invalid Credentials")
     return False
@@ -260,17 +249,16 @@ with st.sidebar:
     menu_options = ["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"]
     if st.session_state.get("user_role") == "SuperAdmin": menu_options.append("🔑 User Management")
     menu_choice = st.radio("Go to Section:", menu_options)
-    
     st.divider()
     st.subheader("⚙️ Settings")
     auto_refresh = st.toggle("🔄 Auto Refresh (10s)", value=False)
     if auto_refresh:
         st_autorefresh(interval=10000, key="data_refresh")
-        st.caption("Live Updates: **ON**")
-    
     st.divider()
     if st.button("🚪 Logout", use_container_width=True):
-        cookie_manager.delete("asm_admin_user")
+        if cookie_manager:
+            try: cookie_manager.delete("asm_admin_user")
+            except: pass
         st.session_state.clear()
         st.rerun()
 
@@ -280,14 +268,12 @@ if menu_choice == "📊 Tracker":
     df_scores = conn.query("SELECT * FROM scores;", ttl=0)
     props_all = get_items_sql("proposals", "title")
     evals_df = conn.query("SELECT name, nickname FROM evaluators ORDER BY name ASC;", ttl=0)
-   
     if df_scores.empty:
         st.info("ℹ️ **No evaluations have been submitted yet.**")
     else:
         numeric_cols = df_scores.select_dtypes(include=['number']).columns
         st.subheader("Current Session Averages")
         st.table(df_scores[numeric_cols].mean().round(2).rename("Global Avg"))
-    
     if not evals_df.empty and len(props_all) > 0:
         total_props_count = len(props_all)
         total_required = total_props_count * len(evals_df)
@@ -295,7 +281,6 @@ if menu_choice == "📊 Tracker":
         st.divider()
         st.progress(min(current_total_submissions / total_required, 1.0) if total_required > 0 else 0)
         st.write(f"**Total System Progress:** {current_total_submissions} / {total_required} Evaluations Completed")
-
         st.subheader("Evaluator Status")
         cols = st.columns(4)
         for i, row in evals_df.iterrows():
@@ -303,37 +288,23 @@ if menu_choice == "📊 Tracker":
             nick = row['nickname'] if row['nickname'] else name
             done_count = len(df_scores[df_scores['evaluator'] == name]) if not df_scores.empty else 0
             is_done = (done_count >= total_props_count)
-            bg = "#E6FFFA" if is_done else "#FFFBEB"
-            border_col = '#38B2AC' if is_done else '#ECC94B'
+            bg, border_col = ("#E6FFFA", '#38B2AC') if is_done else ("#FFFBEB", '#ECC94B')
             img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{name.replace(' ', '_')}.png?t={cache_buster}"
             with cols[i % 4]:
-                st.markdown(f"""
-                    <div style="background-color:{bg}; border-top: 5px solid {border_col}; padding:15px; border-radius:8px; text-align:center; margin-bottom:10px;">
-                        <img src="{img_url}" style="width:60px; height:60px; border-radius:50%; object-fit:cover;" onerror="this.src='https://ui-avatars.com/api/?name={name}'">
-                        <p style="font-weight:bold; margin:5px 0 0 0; color:#333;">{nick}</p>
-                        <p style="font-size:1.1em; font-weight:bold; color:#1E3A8A;">{done_count} / {total_props_count}</p>
-                    </div>
-                """, unsafe_allow_html=True)
+                st.markdown(f"""<div style="background-color:{bg}; border-top: 5px solid {border_col}; padding:15px; border-radius:8px; text-align:center; margin-bottom:10px;"><img src="{img_url}" style="width:60px; height:60px; border-radius:50%; object-fit:cover;" onerror="this.src='https://ui-avatars.com/api/?name={name}'"><p style="font-weight:bold; margin:5px 0 0 0; color:#333;">{nick}</p><p style="font-size:1.1em; font-weight:bold; color:#1E3A8A;">{done_count} / {total_props_count}</p></div>""", unsafe_allow_html=True)
 
     if st.session_state["user_role"] == "SuperAdmin":
         st.divider()
         with st.expander("⚠️ Danger Zone"):
-            st.warning("Archiving will move all current scores to history and reset the tracker.")
             if st.button("🗄️ Force Archive & Reset Session", type="primary"):
                 try:
                     with conn.session as s:
-                        s.execute(text("""
-                            INSERT INTO scores_history (evaluator, proposal_title, total_score, archive_timestamp)
-                            SELECT evaluator, proposal_title, total_score, CURRENT_TIMESTAMP 
-                            FROM scores;
-                        """))
+                        s.execute(text("INSERT INTO scores_history (evaluator, proposal_title, total_score, archive_timestamp) SELECT evaluator, proposal_title, total, CURRENT_TIMESTAMP FROM scores;"))
                         s.execute(text("TRUNCATE TABLE scores;"))
                         s.execute(text("UPDATE evaluators SET has_submitted = FALSE;"))
                         s.commit()
-                    st.success("✅ Session archived and reset!")
-                    time.sleep(1.5); st.rerun()
-                except Exception as e:
-                    st.error(f"Archive failed: {e}")
+                    st.success("✅ Session archived and reset!"); time.sleep(1.5); st.rerun()
+                except Exception as e: st.error(f"Archive failed: {e}")
 
 elif menu_choice == "📋 Proposals":
     st.header("📋 Manage Proposals")
@@ -345,13 +316,10 @@ elif menu_choice == "📋 Proposals":
             with st.form("add_p", clear_on_submit=True):
                 p_name = st.text_input("Proposal Title*")
                 if st.form_submit_button("Add"):
-                    # --- FIX: SINGLE PROPOSAL BLANK CHECK ---
                     if p_name.strip():
                         add_item_sql("proposals", "title", p_name.strip())
                         st.success("✅ Added!"); time.sleep(1); st.rerun()
-                    else:
-                        st.error("🚨 Proposal title cannot be blank!")
-
+                    else: st.error("🚨 Proposal title cannot be blank!")
     st.divider()
     props = get_items_sql("proposals", "title")
     for idx, p in enumerate(props):
@@ -364,70 +332,41 @@ elif menu_choice == "📋 Proposals":
 elif menu_choice == "👤 Evaluators & Links":
     st.header("👤 Evaluators & Access Links")
     if st.session_state["user_role"] != "Viewer":
-        col_bulk, _ = st.columns([1, 4])
-        with col_bulk:
-            if st.button("📚 Bulk Add Evaluators"): 
-                bulk_add_evaluators_dialog()
-        
+        if st.button("📚 Bulk Add Evaluators"): bulk_add_evaluators_dialog()
         with st.expander("➕ Add Single Evaluator"):
             etype = st.radio("Type", ["ASM Staff (SSO)", "External (Manual)"], horizontal=True)
             with st.form("eval_form", clear_on_submit=True):
                 col1, col2 = st.columns(2)
-                e_name = col1.text_input("Full Name*").strip()
-                e_nick = col1.text_input("Nickname*").strip()
-                
+                e_name, e_nick = col1.text_input("Full Name*").strip(), col1.text_input("Nickname*").strip()
                 if etype == "ASM Staff (SSO)":
-                    e_sso = col2.text_input("Microsoft Email*", placeholder="user@akademisains.gov.my")
-                    e_mail = col2.text_input("Alt Email")
-                    e_pass = "SSO_USER"
+                    e_sso, e_mail, e_pass = col2.text_input("Microsoft Email*", placeholder="user@akademisains.gov.my"), col2.text_input("Alt Email"), "SSO_USER"
                 else:
-                    e_sso = None
-                    e_mail = col2.text_input("Email*")
-                    e_pass = col2.text_input("Password*")
-                
+                    e_sso, e_mail, e_pass = None, col2.text_input("Email*"), col2.text_input("Password*")
                 e_file = st.file_uploader("Photo", type=['png', 'jpg'])
-                
                 if st.form_submit_button("Save"):
-                    if not e_name:
-                        st.error("🚨 Name is required!")
+                    if not e_name: st.error("🚨 Name is required!")
                     else:
                         try:
                             with conn.session as s:
-                                s.execute(text("""
-                                    INSERT INTO evaluators (name, nickname, email, sso_email, password, has_submitted) 
-                                    VALUES (:n, :nk, :em, :sso, :pw, FALSE)
-                                    ON CONFLICT (name) DO NOTHING;
-                                """), {"n": e_name, "nk": e_nick, "em": e_mail, "sso": e_sso, "pw": e_pass})
+                                s.execute(text("INSERT INTO evaluators (name, nickname, email, sso_email, password, has_submitted) VALUES (:n, :nk, :em, :sso, :pw, FALSE) ON CONFLICT (name) DO NOTHING;"), {"n": e_name, "nk": e_nick, "em": e_mail, "sso": e_sso, "pw": e_pass})
                                 s.commit()
-                            
                             if e_file:
-                                file_path = f"{e_name.replace(' ', '_')}.png"
-                                supabase.storage.from_(BUCKET_NAME).upload(
-                                    path=file_path, file=e_file.getvalue(), file_options={"x-upsert": "true"}
-                                )
-                            
-                            st.success(f"✅ {e_name} Added!")
-                            time.sleep(1); st.rerun()
-                        except Exception as e:
-                            st.error(f"❌ Database Error: {e}")
-
+                                supabase.storage.from_(BUCKET_NAME).upload(path=f"{e_name.replace(' ', '_')}.png", file=e_file.getvalue(), file_options={"x-upsert": "true"})
+                            st.success(f"✅ {e_name} Added!"); time.sleep(1); st.rerun()
+                        except Exception as e: st.error(f"❌ Database Error: {e}")
     st.divider()
     status_df = conn.query("SELECT * FROM evaluators ORDER BY name ASC;", ttl=0)
     for idx, row in status_df.iterrows():
-        e = row['name']
-        nick = row['nickname']
-        pers_email = row.get('email', '')
-        sso_val = row.get('sso_email')
-        
+        e, nick = row['name'], row['nickname']
         c1, c2, c3, c4, c5, c6, c7 = st.columns([0.5, 2.5, 1.5, 0.6, 0.6, 0.6, 0.6])
         img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
         c1.markdown(f'<img src="{img_url}" style="width:40px; height:40px; border-radius:50%;" onerror="this.src=\'https://ui-avatars.com/api/?name={e}\'">', unsafe_allow_html=True)
         with c2:
             st.write(f"**{nick}**")
-            st.caption(f"📧 {pers_email} | SSO: {sso_val if sso_val else 'None'}")
+            st.caption(f"📧 {row.get('email', '')} | SSO: {row.get('sso_email') if row.get('sso_email') else 'None'}")
         c3.write(f"`{row.get('password')}`")
         if st.session_state["user_role"] in ["SuperAdmin", "Editor"]:
-            if c4.button("✏️", key=f"eval_edit_{idx}_{e}"): edit_evaluator_dialog(e, nick, pers_email, row.get('password'))
+            if c4.button("✏️", key=f"eval_edit_{idx}_{e}"): edit_evaluator_dialog(e, nick, row.get('email', ''), row.get('password'))
             if c6.button("🔄", key=f"eval_reset_{idx}_{e}"):
                 with conn.session as s:
                     s.execute(text("UPDATE evaluators SET has_submitted = FALSE WHERE name = :n"), {"n": e})
@@ -450,72 +389,19 @@ elif menu_choice == "🔑 User Management":
 
 elif menu_choice == "📜 History":
     st.header("📜 Archived Evaluations")
-    
-    # --- 1. FETCH FILTER OPTIONS ---
-    # We pull these from the history table to ensure filters match archived data
     eval_list = conn.query("SELECT DISTINCT evaluator FROM scores_history ORDER BY evaluator", ttl=0)
     prop_list = conn.query("SELECT DISTINCT proposal_title FROM scores_history ORDER BY proposal_title", ttl=0)
-
-    # --- 2. FILTER INTERFACE ---
     with st.expander("🔍 Filter Archives", expanded=True):
-        f_col1, f_col2, f_col3 = st.columns(3)
-        
-        with f_col1:
-            sel_evals = st.multiselect(
-                "Filter by Evaluator", 
-                options=eval_list['evaluator'].tolist() if not eval_list.empty else []
-            )
-        
-        with f_col2:
-            sel_props = st.multiselect(
-                "Filter by Proposal", 
-                options=prop_list['proposal_title'].tolist() if not prop_list.empty else []
-            )
-            
-        with f_col3:
-            # Date input returns a tuple (start, end)
-            sel_dates = st.date_input("Filter by Archive Date", value=[])
-
-    # --- 3. CONSTRUCT DYNAMIC SQL ---
-    query_str = "SELECT * FROM scores_history WHERE 1=1"
-    params = {}
-
-    if sel_evals:
-        query_str += " AND evaluator IN :evals"
-        params["evals"] = tuple(sel_evals)
-
-    if sel_props:
-        query_str += " AND proposal_title IN :props"
-        params["props"] = tuple(sel_props)
-
-    if len(sel_dates) == 2:
-        query_str += " AND archive_timestamp::date BETWEEN :start AND :end"
-        params["start"] = sel_dates[0]
-        params["end"] = sel_dates[1]
-
-    query_str += " ORDER BY archive_timestamp DESC"
-
-    # --- 4. EXECUTE & DISPLAY ---
-    df_hist = conn.query(query_str, params=params, ttl=0)
-
+        f1, f2, f3 = st.columns(3)
+        sel_evals = f1.multiselect("Evaluator", options=eval_list['evaluator'].tolist() if not eval_list.empty else [])
+        sel_props = f2.multiselect("Proposal", options=prop_list['proposal_title'].tolist() if not prop_list.empty else [])
+        sel_dates = f3.date_input("Archive Date", value=[])
+    q, p = "SELECT * FROM scores_history WHERE 1=1", {}
+    if sel_evals: q += " AND evaluator IN :evals"; p["evals"] = tuple(sel_evals)
+    if sel_props: q += " AND proposal_title IN :props"; p["props"] = tuple(sel_props)
+    if len(sel_dates) == 2: q += " AND archive_timestamp::date BETWEEN :start AND :end"; p["start"], p["end"] = sel_dates[0], sel_dates[1]
+    df_hist = conn.query(q + " ORDER BY archive_timestamp DESC", params=p, ttl=0)
     if not df_hist.empty:
-        # Summary metrics for the filtered view
-        st.caption(f"Showing {len(df_hist)} archived records based on current filters.")
-        
-        # Action Buttons (Download)
-        csv_history = df_hist.to_csv(index=False).encode('utf-8')
-        col_dl, _ = st.columns([1, 3])
-        with col_dl:
-            st.download_button(
-                label="📥 Download Filtered CSV", 
-                data=csv_history, 
-                file_name=f"asm_filtered_history_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", 
-                mime="text/csv", 
-                use_container_width=True
-            )
-        
-        # Display Data
+        st.download_button(label="📥 Download Filtered CSV", data=df_hist.to_csv(index=False).encode('utf-8'), file_name=f"asm_history_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
         st.dataframe(df_hist, use_container_width=True, hide_index=True)
-    else:
-        st.info("ℹ️ No archived data found matching the selected filters.")
-
+    else: st.info("ℹ️ No archived data found matching the selected filters.")

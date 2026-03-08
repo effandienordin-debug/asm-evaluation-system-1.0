@@ -146,7 +146,7 @@ if not df.empty:
                 else:
                     comment_html = "-"
                 
-                rec_text = row.get('recommendation', '-') if pd.notnull(row.get('recommendation')) else "-"
+                rec_text = row.get('recommendation', '') if pd.notnull(row.get('recommendation')) else "-"
                 
                 table_html += f"""
                     <tr>
@@ -165,3 +165,4 @@ if not df.empty:
 else:
     st.title("📊 Live Evaluation Dashboard")
     st.info("Awaiting submissions...")
+

@@ -14,6 +14,9 @@ import extra_streamlit_components as stx
 st.set_page_config(page_title="ASM Admin Panel", layout="wide")
 cache_buster = datetime.now().strftime("%Y%m%d%H%M%S")
 
+# Standard Blank User Icon URL
+BLANK_ICON = "https://cdn-icons-png.flaticon.com/512/149/149071.png"
+
 # Initialize Cookie Manager SAFELY (No @st.cache to avoid Widget Warning)
 try:
     cookie_manager = stx.CookieManager(key="main_cookie_manager")
@@ -199,7 +202,6 @@ def check_password():
     if st.session_state.get("authenticated"): 
         return True
     
-    # Try to recover session from cookie manager safely
     if cookie_manager:
         try:
             saved_user = cookie_manager.get(cookie="asm_admin_user")
@@ -213,7 +215,7 @@ def check_password():
                     })
                     return True
         except Exception:
-            pass # Skip cookie recovery if component is unstable
+            pass 
     
     st.markdown("<h1 style='text-align: center;'>🛡️ ASM Admin Access</h1>", unsafe_allow_html=True)
     _, center, _ = st.columns([1, 1.5, 1])
@@ -229,7 +231,6 @@ def check_password():
                         "username": user_data.iloc[0]['username'], 
                         "user_role": user_data.iloc[0]['role']
                     })
-                    # Set cookie safely
                     if cookie_manager:
                         try: cookie_manager.set("asm_admin_user", user_data.iloc[0]['username'])
                         except Exception: pass
@@ -296,7 +297,14 @@ if menu_choice == "📊 Tracker":
             bg, border_col = ("#E6FFFA", '#38B2AC') if is_done else ("#FFFBEB", '#ECC94B')
             img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{name.replace(' ', '_')}.png?t={cache_buster}"
             with cols[i % 4]:
-                st.markdown(f"""<div style="background-color:{bg}; border-top: 5px solid {border_col}; padding:15px; border-radius:8px; text-align:center; margin-bottom:10px;"><img src="{img_url}" style="width:60px; height:60px; border-radius:50%; object-fit:cover;" onerror="this.src='https://ui-avatars.com/api/?name={name}'"><p style="font-weight:bold; margin:5px 0 0 0; color:#333;">{nick}</p><p style="font-size:1.1em; font-weight:bold; color:#1E3A8A;">{done_count} / {total_props_count}</p></div>""", unsafe_allow_html=True)
+                st.markdown(f"""
+                    <div style="background-color:{bg}; border-top: 5px solid {border_col}; padding:15px; border-radius:8px; text-align:center; margin-bottom:10px;">
+                        <img src="{img_url}" style="width:60px; height:60px; border-radius:50%; object-fit:cover;" 
+                        onerror="this.src='{BLANK_ICON}'; this.style.filter='grayscale(1)';" >
+                        <p style="font-weight:bold; margin:5px 0 0 0; color:#333;">{nick}</p>
+                        <p style="font-size:1.1em; font-weight:bold; color:#1E3A8A;">{done_count} / {total_props_count}</p>
+                    </div>
+                """, unsafe_allow_html=True)
 
     if st.session_state["user_role"] == "SuperAdmin":
         st.divider()
@@ -365,7 +373,10 @@ elif menu_choice == "👤 Evaluators & Links":
         e, nick = row['name'], row['nickname']
         c1, c2, c3, c4, c5, c6, c7 = st.columns([0.5, 2.5, 1.5, 0.6, 0.6, 0.6, 0.6])
         img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{e.replace(' ', '_')}.png?t={cache_buster}"
-        c1.markdown(f'<img src="{img_url}" style="width:40px; height:40px; border-radius:50%;" onerror="this.src=\'https://ui-avatars.com/api/?name={e}\'">', unsafe_allow_html=True)
+        c1.markdown(f"""
+            <img src="{img_url}" style="width:40px; height:40px; border-radius:50%; object-fit:cover;" 
+            onerror="this.src='{BLANK_ICON}'; this.style.filter='grayscale(1)';" >
+        """, unsafe_allow_html=True)
         with c2:
             st.write(f"**{nick}**")
             st.caption(f"📧 {row.get('email', '')} | SSO: {row.get('sso_email') if row.get('sso_email') else 'None'}")

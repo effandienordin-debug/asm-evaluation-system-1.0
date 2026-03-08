@@ -137,7 +137,8 @@ with st.form("evaluation_form"):
     st.divider()
     
     # --- MULTI-SELECT RECOMMENDATION LOGIC ---
-    rec_choices = ["Approve", "Revise", "Reject", "Combined/Merge"]
+    # Added '-NA-' to choices
+    rec_choices = ["Approve", "Revise", "Reject", "Combined/Merge", "-NA-"]
     default_recs = []
     
     if not existing_data.empty:
@@ -145,6 +146,9 @@ with st.form("evaluation_form"):
         if raw_rec:
             saved_recs = [r.strip() for r in str(raw_rec).split(",")]
             default_recs = [r for r in saved_recs if r in rec_choices]
+        else:
+            # If entry exists but recommendation is empty, default to '-NA-'
+            default_recs = ["-NA-"]
 
     recommendation_list = st.multiselect(
         "Overall Recommendation (Select one or more)", 
@@ -161,7 +165,7 @@ if submit:
     if not comments.strip():
         st.error("⚠️ Please provide justification comments.")
     elif not recommendation_list:
-        st.error("⚠️ Please select at least one recommendation.")
+        st.error("⚠️ Please select at least one recommendation (Use '-NA-' if unsure).")
     else:
         recommendation_str = ", ".join(recommendation_list)
         total_score = sum(scores[label] * weight for label, weight in CRITERIA)

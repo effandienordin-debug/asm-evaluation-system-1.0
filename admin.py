@@ -14,15 +14,11 @@ import extra_streamlit_components as stx
 st.set_page_config(page_title="ASM Admin Panel", layout="wide")
 cache_buster = datetime.now().strftime("%Y%m%d%H%M%S")
 
-# Initialize Cookie Manager safely
-@st.cache_resource
-def get_cookie_manager():
-    try:
-        return stx.CookieManager(key="main_cookie_manager")
-    except:
-        return None
-
-cookie_manager = get_cookie_manager()
+# Initialize Cookie Manager SAFELY (No @st.cache to avoid Widget Warning)
+try:
+    cookie_manager = stx.CookieManager(key="main_cookie_manager")
+except Exception:
+    cookie_manager = None
 
 # Initialize Session States
 if "authenticated" not in st.session_state:
@@ -203,17 +199,21 @@ def check_password():
     if st.session_state.get("authenticated"): 
         return True
     
-    # Try to recover session from cookie manager if available
+    # Try to recover session from cookie manager safely
     if cookie_manager:
         try:
             saved_user = cookie_manager.get(cookie="asm_admin_user")
             if saved_user:
                 user_check = conn.query("SELECT username, role FROM users WHERE username = :u", params={"u": saved_user}, ttl=0)
                 if not user_check.empty:
-                    st.session_state.update({"authenticated": True, "username": user_check.iloc[0]['username'], "user_role": user_check.iloc[0]['role']})
+                    st.session_state.update({
+                        "authenticated": True, 
+                        "username": user_check.iloc[0]['username'], 
+                        "user_role": user_check.iloc[0]['role']
+                    })
                     return True
-        except:
-            pass # Silently fail if cookie component isn't ready
+        except Exception:
+            pass # Skip cookie recovery if component is unstable
     
     st.markdown("<h1 style='text-align: center;'>🛡️ ASM Admin Access</h1>", unsafe_allow_html=True)
     _, center, _ = st.columns([1, 1.5, 1])
@@ -224,10 +224,15 @@ def check_password():
             if st.form_submit_button("Sign In", use_container_width=True):
                 user_data = conn.query("SELECT username, password_hash, role FROM users WHERE LOWER(username) = LOWER(:u)", params={"u": u_input}, ttl=0)
                 if not user_data.empty and str(user_data.iloc[0]['password_hash']) == p_input:
-                    st.session_state.update({"authenticated": True, "username": user_data.iloc[0]['username'], "user_role": user_data.iloc[0]['role']})
+                    st.session_state.update({
+                        "authenticated": True, 
+                        "username": user_data.iloc[0]['username'], 
+                        "user_role": user_data.iloc[0]['role']
+                    })
+                    # Set cookie safely
                     if cookie_manager:
                         try: cookie_manager.set("asm_admin_user", user_data.iloc[0]['username'])
-                        except: pass
+                        except Exception: pass
                     st.rerun()
                 else: st.error("❌ Invalid Credentials")
     return False
@@ -258,7 +263,7 @@ with st.sidebar:
     if st.button("🚪 Logout", use_container_width=True):
         if cookie_manager:
             try: cookie_manager.delete("asm_admin_user")
-            except: pass
+            except Exception: pass
         st.session_state.clear()
         st.rerun()
 

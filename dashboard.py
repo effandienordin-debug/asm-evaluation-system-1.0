@@ -54,8 +54,8 @@ if not df.empty:
     for proposal in unique_proposals:
         prop_df = df[df['proposal_title'] == proposal].copy()
         
-        # Header
-        st.markdown(f<div class='proposal-header'>📂 Proposal: {proposal}</div>", unsafe_allow_html=True)
+        # Header - FIXED SYNTAX HERE
+        st.markdown(f"<div class='proposal-header'>📂 Proposal: {proposal}</div>", unsafe_allow_html=True)
         
         # 1. Metrics
         m1, m2, m3, m4 = st.columns(4)

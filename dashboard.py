@@ -2,6 +2,11 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import io
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import landscape, A4
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 
 # --- Page Config ---
 st.set_page_config(page_title="ASM Result Dashboard", layout="wide")
@@ -21,7 +26,6 @@ st.markdown("""
         margin-bottom: 10px;
         font-weight: bold;
     }
-    /* Custom Styling for the wrapping table */
     .wrapped-table {
         width: 100%;
         border-collapse: collapse;
@@ -44,7 +48,6 @@ st.markdown("""
         white-space: normal !important;
         line-height: 1.4;
     }
-    /* NEW: Styling for the comment bubble from your screenshot */
     .comment-bubble {
         background-color: #f0f2f6;
         border-radius: 10px;
@@ -55,12 +58,7 @@ st.markdown("""
         display: inline-block;
         width: 100%;
     }
-    .comment-bubble p {
-        margin: 0;
-        padding: 2px 0;
-    }
-
-    /* Column Width Management */
+    .comment-bubble p { margin: 0; padding: 2px 0; }
     .col-eval { width: 10%; }
     .col-crit { width: 6%; text-align: center; }
     .col-total { width: 5%; font-weight: bold; text-align: center; }
@@ -69,13 +67,71 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+# --- Admin Functionality: PDF Generator ---
+def generate_pdf(dataframe, criteria_cols):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4))
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    elements.append(Paragraph("ASM Evaluation Full Results Report", styles['Title']))
+    elements.append(Spacer(1, 12))
+
+    # Prepare Table Data
+    headers = ['Proposal', 'Evaluator'] + [c.replace('_', ' ').title() for c in criteria_cols] + ['Total', 'Rec']
+    data = [headers]
+
+    for _, row in dataframe.iterrows():
+        line = [
+            row['proposal_title'],
+            row['evaluator']
+        ] + [row[c] for c in criteria_cols] + [f"{row['total']:.2f}", row['recommendation']]
+        data.append(line)
+
+    # Create Table
+    t = Table(data, repeatRows=1)
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.hexColor("#1E3A8A")),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.whitesmoke),
+        ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+        ('FONTSIZE', (0, 1), (-1, -1), 8),
+    ]))
+    
+    elements.append(t)
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
 # --- Database Connection ---
 conn = st.connection("postgresql", type="sql")
+CRITERIA_COLS = ['strategic_alignment', 'potential_impact', 'feasibility', 'budget_justification', 'timeline_readiness', 'execution_strategy']
 
-CRITERIA_COLS = [
-    'strategic_alignment', 'potential_impact', 'feasibility', 
-    'budget_justification', 'timeline_readiness', 'execution_strategy'
-]
+# --- SIDEBAR: ADMIN ACCESS ---
+with st.sidebar:
+    st.title("🔐 Admin Controls")
+    admin_password = st.text_input("Enter Admin Password", type="password")
+    # Change 'asm2024' to whatever password you prefer
+    is_admin = (admin_password == "asm_admin_pass") 
+    
+    if is_admin:
+        st.success("Admin Access Granted")
+        all_data = conn.query("SELECT * FROM scores;", ttl=0)
+        if not all_data.empty:
+            pdf_file = generate_pdf(all_data, CRITERIA_COLS)
+            st.download_button(
+                label="📥 Download Results (PDF)",
+                data=pdf_file,
+                file_name="ASM_Full_Results.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+    elif admin_password:
+        st.error("Incorrect Password")
 
 # --- Auto-Refresh Toggle ---
 col_ref1, col_ref2 = st.columns([6, 1])
@@ -115,7 +171,7 @@ if not df.empty:
             fig_radar.update_layout(template="plotly_white", polar=dict(radialaxis=dict(range=[0, 5])))
             st.plotly_chart(fig_radar, use_container_width=True)
 
-        # 3. Table with Screenshot-style Comments
+        # 3. Table
         with st.expander(f"View Detailed Reviews for {proposal}", expanded=True):
             header_row = "".join([f"<th class='col-crit'>{c.replace('_', ' ').title()}</th>" for c in CRITERIA_COLS])
             
@@ -133,13 +189,9 @@ if not df.empty:
             
             for _, row in prop_df.iterrows():
                 crit_data = "".join([f"<td class='col-crit'>{row.get(c, 0)}</td>" for c in CRITERIA_COLS])
-                
-                # Format comments to look like the screenshot (bullet points in a bubble)
                 raw_comment = str(row.get('comments', '-')) if pd.notnull(row.get('comments')) else "-"
                 
-                # Logic to convert newline-separated text into bullet points
                 if raw_comment != "-":
-                    # Split by newlines and wrap in <p> tags with a dash
                     lines = raw_comment.split('\n')
                     formatted_comment = "".join([f"<p> {line.strip()}</p>" for line in lines if line.strip()])
                     comment_html = f"<div class='comment-bubble'>{formatted_comment}</div>"
@@ -165,8 +217,3 @@ if not df.empty:
 else:
     st.title("📊 Live Evaluation Dashboard")
     st.info("Awaiting submissions...")
-
-
-
-
-

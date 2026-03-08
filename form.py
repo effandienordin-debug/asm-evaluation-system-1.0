@@ -19,21 +19,53 @@ CRITERIA = [
 st.set_page_config(page_title="ASM Evaluator Entry", layout="wide")
 conn = st.connection("postgresql", type="sql")
 
-# --- 2. USER IDENTIFICATION ---
-# Since login is removed, we need a way to know WHO is scoring.
-# You can change this to a selectbox of names from your DB if preferred.
-with st.sidebar:
-    st.title("👤 Session")
-    current_user = st.text_input("Enter Your Name to Begin", value=st.session_state.get("current_user", ""))
-    st.session_state["current_user"] = current_user
-    
-    if not current_user:
-        st.warning("Please enter your name in the sidebar to load your evaluations.")
-        st.stop()
+# --- 2. EMAIL-BASED ACCESS CONTROL ---
+if "current_user" not in st.session_state:
+    st.session_state["current_user"] = None
+if "user_email" not in st.session_state:
+    st.session_state["user_email"] = None
 
-# --- 3. APP CONTENT ---
+# Show access screen if not verified
+if not st.session_state["user_email"]:
+    st.title("🛡️ ASM Evaluator Access")
+    input_email = st.text_input("Enter your Registered Email to Access Portal", placeholder="name@organization.com").lower().strip()
+    
+    if st.button("Access System", type="primary", use_container_width=True):
+        if input_email:
+            # Check database for this email
+            user_check = conn.query(
+                "SELECT name FROM evaluators WHERE LOWER(sso_email) = :e LIMIT 1", 
+                params={"e": input_email}, ttl=0
+            )
+            
+            if not user_check.empty:
+                st.session_state["user_email"] = input_email
+                st.session_state["current_user"] = user_check.iloc[0]['name']
+                st.success(f"Welcome back, {st.session_state['current_user']}!")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error("❌ Email not found in the authorized database. Please contact the administrator.")
+        else:
+            st.warning("Please enter an email address.")
+    st.stop() # Halt execution here until email is verified
+
+# --- 3. AUTHORIZED APP CONTENT ---
+current_user = st.session_state["current_user"]
+user_email = st.session_state["user_email"]
+
 st_autorefresh(interval=30000, key="evaluator_heartbeat")
 
+# Sidebar for User Info & Exit
+with st.sidebar:
+    st.write(f"Logged in as:")
+    st.subheader(current_user)
+    st.caption(user_email)
+    if st.button("Logout / Change Email"):
+        st.session_state.clear()
+        st.rerun()
+
+# Navigation helper functions
 def nav_to_summary():
     st.session_state.proposal_selector = "-- Select --"
     st.session_state.is_editing = False
@@ -50,17 +82,16 @@ def get_cloud_list(table, column):
 
 PROPOSALS = get_cloud_list("proposals", "title")
 
-# Header with Avatar
+# Profile Header
 col_img, col_txt = st.columns([1, 4])
 with col_img:
-    # Attempt to load photo from Supabase based on name
     img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{current_user.replace(' ', '_')}.png"
     st.markdown(f'<div style="text-align: center;"><img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; border: 3px solid #1E3A8A;" onerror="this.src=\'https://ui-avatars.com/api/?name={current_user}\'"></div>', unsafe_allow_html=True)
 
 with col_txt:
-    st.title(f"ASM Portal: {current_user}")
+    st.title(f"Evaluation Dashboard")
 
-# Fetch progress
+# Progress Data
 try:
     scored_df = conn.query("SELECT proposal_title, total, recommendation, comments FROM scores WHERE evaluator = :ev", params={"ev": current_user}, ttl=0)
     completed_proposals = scored_df['proposal_title'].tolist() if not scored_df.empty else []
@@ -68,14 +99,14 @@ except:
     scored_df = pd.DataFrame()
     completed_proposals = []
 
-st.write(f"**Your Progress: {len(completed_proposals)} / {len(PROPOSALS)} Proposals**")
+st.write(f"**Overall Progress: {len(completed_proposals)} / {len(PROPOSALS)} Proposals**")
 st.progress(len(completed_proposals) / len(PROPOSALS) if PROPOSALS else 0)
 st.divider()
 
 if "proposal_selector" not in st.session_state:
     st.session_state.proposal_selector = "-- Select --"
 
-selected_proposal = st.selectbox("Select Proposal", ["-- Select --"] + PROPOSALS, key="proposal_selector")
+selected_proposal = st.selectbox("Select Proposal to Evaluate", ["-- Select --"] + PROPOSALS, key="proposal_selector")
 
 if selected_proposal != "-- Select --":
     query = "SELECT * FROM scores WHERE evaluator = :ev AND proposal_title = :prop LIMIT 1;"

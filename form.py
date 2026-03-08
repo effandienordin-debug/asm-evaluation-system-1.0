@@ -2,20 +2,11 @@ import streamlit as st
 import pandas as pd
 import time
 import re
-import msal
-import warnings
 from datetime import datetime
 from sqlalchemy import text
 from streamlit_autorefresh import st_autorefresh
 
-# 1. SILENCE MSAL SECURITY WARNINGS
-warnings.filterwarnings("ignore", category=UserWarning, module="msal")
-
-# --- 2. CONFIGURATION ---
-CLIENT_ID = st.secrets["azure_client_id"]
-CLIENT_SECRET = st.secrets["azure_client_secret"]
-TENANT_ID = st.secrets["azure_tenant_id"]
-REDIRECT_URI = st.secrets["azure_redirect_uri"] 
+# --- 1. CONFIGURATION ---
 SUPABASE_URL = st.secrets["supabase_url"]
 BUCKET_NAME = "evaluator-photos"
 
@@ -28,115 +19,61 @@ CRITERIA = [
 st.set_page_config(page_title="ASM Evaluator Entry", layout="wide")
 conn = st.connection("postgresql", type="sql")
 
-# --- 3. SESSION STATE ---
+# --- 2. SESSION STATE ---
 if "current_user" not in st.session_state:
     st.session_state["current_user"] = None
 if "user_email" not in st.session_state:
     st.session_state["user_email"] = None
-if "auth_flow" not in st.session_state:
-    st.session_state["auth_flow"] = None
 
-# --- 4. AUTHENTICATION HELPERS ---
-def get_msal_app():
-    return msal.ConfidentialClientApplication(
-        CLIENT_ID, 
-        authority=f"https://login.microsoftonline.com/{TENANT_ID}",
-        client_credential=CLIENT_SECRET
-    )
-
-def verify_and_login(email):
-    """Verifies email against database and starts session."""
-    if not email:
-        return False
-    email_clean = email.lower().strip()
-    user_check = conn.query(
-        "SELECT name FROM evaluators WHERE LOWER(sso_email) = :e LIMIT 1", 
-        params={"e": email_clean}, ttl=0
-    )
-    if not user_check.empty:
-        st.session_state["user_email"] = email_clean
-        st.session_state["current_user"] = user_check.iloc[0]['name']
-        return True
-    return False
-
-# --- 5. ACCESS CONTROL SCREEN ---
+# --- 3. ACCESS CONTROL SCREEN ---
 if not st.session_state["user_email"]:
-    params = st.query_params.to_dict()
-
-    # A. Check for SSO Callback
-    if "code" in params:
-        flow = st.session_state.get("auth_flow")
-        if flow:
-            try:
-                app = get_msal_app()
-                result = app.acquire_token_by_auth_code_flow(flow, params)
-                if "id_token_claims" in result:
-                    sso_email = result["id_token_claims"].get("preferred_username")
-                    if verify_and_login(sso_email):
-                        st.query_params.clear()
-                        st.rerun()
-                    else:
-                        st.error(f"❌ Access Denied: {sso_email} is not authorized.")
-            except Exception as e:
-                st.error(f"SSO Error: {e}")
-        else:
-            st.error("Session expired. Please try again.")
-
-    # B. Login UI
     st.title("🛡️ ASM Evaluator Access")
+    st.markdown("### Please enter your registered email to proceed.")
     
-    input_email = st.text_input("Enter Registered Email", placeholder="name@organization.com").lower().strip()
+    input_email = st.text_input("Registered Email", placeholder="name@organization.com").lower().strip()
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("Access System", type="primary", use_container_width=True):
-            if verify_and_login(input_email):
-                st.success(f"Welcome back!")
+    if st.button("Access System", type="primary", use_container_width=True):
+        if input_email:
+            # Query DB to check if email exists in sso_email column
+            user_check = conn.query(
+                "SELECT name FROM evaluators WHERE LOWER(sso_email) = :e LIMIT 1", 
+                params={"e": input_email}, ttl=0
+            )
+            
+            if not user_check.empty:
+                # Success: Set session state and refresh
+                st.session_state["user_email"] = input_email
+                st.session_state["current_user"] = user_check.iloc[0]['name']
+                st.success(f"Access Granted. Welcome, {st.session_state['current_user']}!")
                 time.sleep(1)
                 st.rerun()
             else:
-                st.error("❌ Email not found in the authorized database.")
+                st.error("❌ Access Denied: This email is not registered in the authorized evaluator database.")
+        else:
+            st.warning("⚠️ Please enter an email address.")
+    
+    # Simple footer for the login page
+    st.divider()
+    st.caption("Technical issues? Please contact the ASM Administrator.")
+    st.stop() # Prevents the rest of the app from loading until verified
 
-    with col2:
-        # Generate SSO flow for the button
-        if st.session_state["auth_flow"] is None:
-            try:
-                app = get_msal_app()
-                st.session_state["auth_flow"] = app.initiate_auth_code_flow(["User.Read"], redirect_uri=REDIRECT_URI)
-            except: pass
-        
-        if st.session_state["auth_flow"]:
-            auth_url = st.session_state["auth_flow"].get("auth_uri")
-            if input_email: auth_url += f"&login_hint={input_email}"
-            
-            st.markdown(f'''
-                <a href="{auth_url}" target="_top" style="text-decoration:none;">
-                    <div style="background-color:#1E3A8A; color:white; text-align:center; 
-                    padding:10px; border-radius:5px; font-weight:bold; height:42px; border:1px solid #1E3A8A;">
-                        Sign in with Microsoft
-                    </div>
-                </a>
-            ''', unsafe_allow_html=True)
-
-    st.stop() 
-
-# --- 6. AUTHORIZED APP CONTENT ---
+# --- 4. AUTHORIZED APP CONTENT ---
 current_user = st.session_state["current_user"]
 user_email = st.session_state["user_email"]
 
 st_autorefresh(interval=30000, key="evaluator_heartbeat")
 
-# Sidebar
+# Sidebar for User Info & Logout
 with st.sidebar:
-    st.write(f"Logged in as:")
+    st.write(f"**Logged in as:**")
     st.subheader(current_user)
     st.caption(user_email)
-    if st.button("Logout / Change Email"):
+    st.divider()
+    if st.button("🚪 Logout / Change User", use_container_width=True):
         st.session_state.clear()
         st.rerun()
 
-# Functions
+# Navigation helper functions
 def nav_to_summary():
     st.session_state.proposal_selector = "-- Select --"
     st.session_state.is_editing = False
@@ -156,13 +93,19 @@ PROPOSALS = get_cloud_list("proposals", "title")
 # Profile Header
 col_img, col_txt = st.columns([1, 4])
 with col_img:
+    # Logic to fetch photo from Supabase
     img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{current_user.replace(' ', '_')}.png"
-    st.markdown(f'<div style="text-align: center;"><img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; border: 3px solid #1E3A8A;" onerror="this.src=\'https://ui-avatars.com/api/?name={current_user}\'"></div>', unsafe_allow_html=True)
+    st.markdown(f'''
+        <div style="text-align: center;">
+            <img src="{img_url}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; border: 3px solid #1E3A8A;" 
+            onerror="this.src='https://ui-avatars.com/api/?name={current_user}&background=random'">
+        </div>
+    ''', unsafe_allow_html=True)
 
 with col_txt:
-    st.title(f"Evaluation Dashboard")
+    st.title(f"Evaluator Portal: {current_user}")
 
-# Progress
+# Progress Data
 try:
     scored_df = conn.query("SELECT proposal_title, total, recommendation, comments FROM scores WHERE evaluator = :ev", params={"ev": current_user}, ttl=0)
     completed_proposals = scored_df['proposal_title'].tolist() if not scored_df.empty else []
@@ -174,6 +117,7 @@ st.write(f"**Overall Progress: {len(completed_proposals)} / {len(PROPOSALS)} Pro
 st.progress(len(completed_proposals) / len(PROPOSALS) if PROPOSALS else 0)
 st.divider()
 
+# Proposal Selector
 if "proposal_selector" not in st.session_state:
     st.session_state.proposal_selector = "-- Select --"
 

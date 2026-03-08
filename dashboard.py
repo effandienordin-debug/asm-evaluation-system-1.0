@@ -67,9 +67,10 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- Admin Functionality: PDF Generator ---
+# --- Admin Functionality: PDF Generator (FIXED) ---
 def generate_pdf(dataframe, criteria_cols):
     buffer = io.BytesIO()
+    # Using landscape A4 to fit all criteria columns
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4))
     elements = []
     styles = getSampleStyleSheet()
@@ -82,16 +83,25 @@ def generate_pdf(dataframe, criteria_cols):
     data = [headers]
 
     for _, row in dataframe.iterrows():
+        # Handle potential nulls in row data
         line = [
-            row['proposal_title'],
-            row['evaluator']
-        ] + [row[c] for c in criteria_cols] + [f"{row['total']:.2f}", row['recommendation']]
+            str(row.get('proposal_title', '-')),
+            str(row.get('evaluator', '-'))
+        ]
+        # Add criteria scores
+        for c in criteria_cols:
+            line.append(str(row.get(c, 0)))
+        
+        # Add total and recommendation
+        line.append(f"{row.get('total', 0):.2f}")
+        line.append(str(row.get('recommendation', '-')))
         data.append(line)
 
     # Create Table
     t = Table(data, repeatRows=1)
     t.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.hexColor("#1E3A8A")),
+        # FIXED: Changed hexColor to HexColor (Capital H)
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#1E3A8A")),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
@@ -115,21 +125,24 @@ CRITERIA_COLS = ['strategic_alignment', 'potential_impact', 'feasibility', 'budg
 with st.sidebar:
     st.title("🔐 Admin Controls")
     admin_password = st.text_input("Enter Admin Password", type="password")
-    # Change 'asm2024' to whatever password you prefer
+    # Using the password from your previous requirement
     is_admin = (admin_password == "asm_admin_pass") 
     
     if is_admin:
         st.success("Admin Access Granted")
         all_data = conn.query("SELECT * FROM scores;", ttl=0)
         if not all_data.empty:
-            pdf_file = generate_pdf(all_data, CRITERIA_COLS)
-            st.download_button(
-                label="📥 Download Results (PDF)",
-                data=pdf_file,
-                file_name="ASM_Full_Results.pdf",
-                mime="application/pdf",
-                use_container_width=True
-            )
+            try:
+                pdf_file = generate_pdf(all_data, CRITERIA_COLS)
+                st.download_button(
+                    label="📥 Download Results (PDF)",
+                    data=pdf_file,
+                    file_name="ASM_Full_Results.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.error(f"Error generating PDF: {e}")
     elif admin_password:
         st.error("Incorrect Password")
 

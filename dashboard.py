@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import io
+from datetime import datetime
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
@@ -67,53 +68,84 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- Admin Functionality: PDF Generator (FIXED) ---
+# --- PDF Generation Logic with Footer & Wrapping ---
 def generate_pdf(dataframe, criteria_cols):
     buffer = io.BytesIO()
-    # Using landscape A4 to fit all criteria columns
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4))
+    # Define margins (30 points = ~0.4 inches)
+    doc = SimpleDocTemplate(
+        buffer, 
+        pagesize=landscape(A4),
+        rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=50
+    )
+    
     elements = []
     styles = getSampleStyleSheet()
+    timestamp = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
     
+    # Title
     elements.append(Paragraph("ASM Evaluation Full Results Report", styles['Title']))
     elements.append(Spacer(1, 12))
 
-    # Prepare Table Data
-    headers = ['Proposal', 'Evaluator'] + [c.replace('_', ' ').title() for c in criteria_cols] + ['Total', 'Rec']
+    # Calculate Available Width (A4 Landscape is 841.89 points)
+    available_width = 781 
+
+    # Headers (Shorten names to fit)
+    headers = ['Proposal', 'Evaluator'] + [c.replace('_', ' ').title().split(' ')[0] for c in criteria_cols] + ['Total', 'Rec']
+    
+    # Define Column Widths (Percentages)
+    col_widths = [
+        available_width * 0.35, # Proposal Title gets most space
+        available_width * 0.15, # Evaluator
+        available_width * 0.06, # Crit 1
+        available_width * 0.06, # Crit 2
+        available_width * 0.06, # Crit 3
+        available_width * 0.06, # Crit 4
+        available_width * 0.06, # Crit 5
+        available_width * 0.06, # Crit 6
+        available_width * 0.04, # Total
+        available_width * 0.08  # Rec
+    ]
+
     data = [headers]
+    body_style = styles["BodyText"]
+    body_style.fontSize = 7 # Small font for large data table
 
     for _, row in dataframe.iterrows():
-        # Handle potential nulls in row data
         line = [
-            str(row.get('proposal_title', '-')),
-            str(row.get('evaluator', '-'))
+            Paragraph(str(row.get('proposal_title', '-')), body_style), # Wrap Title
+            Paragraph(str(row.get('evaluator', '-')), body_style),      # Wrap Evaluator
         ]
-        # Add criteria scores
         for c in criteria_cols:
             line.append(str(row.get(c, 0)))
         
-        # Add total and recommendation
         line.append(f"{row.get('total', 0):.2f}")
         line.append(str(row.get('recommendation', '-')))
         data.append(line)
 
-    # Create Table
-    t = Table(data, repeatRows=1)
+    # Build Table
+    t = Table(data, colWidths=col_widths, repeatRows=1)
     t.setStyle(TableStyle([
-        # FIXED: Changed hexColor to HexColor (Capital H)
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#1E3A8A")),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 10),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('FONTSIZE', (0, 0), (-1, 0), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
         ('BACKGROUND', (0, 1), (-1, -1), colors.whitesmoke),
-        ('GRID', (0, 0), (-1, -1), 1, colors.grey),
-        ('FONTSIZE', (0, 1), (-1, -1), 8),
     ]))
     
     elements.append(t)
-    doc.build(elements)
+
+    # Footer Function
+    def add_footer(canvas, doc):
+        canvas.saveState()
+        footer_text = f"ASM Evaluation Report | Generated on: {timestamp} | Page {doc.page}"
+        canvas.setFont('Helvetica', 8)
+        canvas.drawCentredString(landscape(A4)[0]/2, 30, footer_text)
+        canvas.restoreState()
+
+    doc.build(elements, onFirstPage=add_footer, onLaterPages=add_footer)
     buffer.seek(0)
     return buffer
 
@@ -125,7 +157,7 @@ CRITERIA_COLS = ['strategic_alignment', 'potential_impact', 'feasibility', 'budg
 with st.sidebar:
     st.title("🔐 Admin Controls")
     admin_password = st.text_input("Enter Admin Password", type="password")
-    # Using the password from your previous requirement
+    # THE PASSWORD LINKED:
     is_admin = (admin_password == "asm_admin_pass") 
     
     if is_admin:
@@ -135,14 +167,14 @@ with st.sidebar:
             try:
                 pdf_file = generate_pdf(all_data, CRITERIA_COLS)
                 st.download_button(
-                    label="📥 Download Results (PDF)",
+                    label="📥 Download Full PDF Report",
                     data=pdf_file,
-                    file_name="ASM_Full_Results.pdf",
+                    file_name=f"ASM_Full_Results_{datetime.now().strftime('%Y%m%d')}.pdf",
                     mime="application/pdf",
                     use_container_width=True
                 )
             except Exception as e:
-                st.error(f"Error generating PDF: {e}")
+                st.error(f"Error: {e}")
     elif admin_password:
         st.error("Incorrect Password")
 
@@ -175,7 +207,7 @@ if not df.empty:
         # 2. Visuals
         c1, c2 = st.columns([1, 1])
         with c1:
-            fig_bar = px.bar(prop_df, x='evaluator', y='total', range_y=[0,5], title="Total Scores", color='total', color_continuous_scale='GnBu')
+            fig_bar = px.bar(prop_df, x='evaluator', y='total', range_y=[0,5], title="Scores", color='total', color_continuous_scale='GnBu')
             fig_bar.update_layout(template="plotly_white")
             st.plotly_chart(fig_bar, use_container_width=True)
         with c2:
@@ -211,14 +243,12 @@ if not df.empty:
                 else:
                     comment_html = "-"
                 
-                rec_text = row.get('recommendation', '-') if pd.notnull(row.get('recommendation')) else "-"
-                
                 table_html += f"""
                     <tr>
                         <td class='col-eval'><b>{row['evaluator']}</b></td>
                         {crit_data}
                         <td class='col-total'>{row['total']:.2f}</td>
-                        <td class='col-rec'>{rec_text}</td>
+                        <td class='col-rec'>{row.get('recommendation', '-')}</td>
                         <td class='col-comm'>{comment_html}</td>
                     </tr>
                 """

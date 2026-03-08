@@ -135,7 +135,7 @@ if not df.empty:
                 crit_data = "".join([f"<td class='col-crit'>{row.get(c, 0)}</td>" for c in CRITERIA_COLS])
                 
                 # Format comments to look like the screenshot (bullet points in a bubble)
-                raw_comment = str(row.get('comments', '')) if pd.notnull(row.get('comments')) else "-"
+                raw_comment = str(row.get('comments', '-')) if pd.notnull(row.get('comments')) else ""
                 
                 # Logic to convert newline-separated text into bullet points
                 if raw_comment != "-":
@@ -165,5 +165,6 @@ if not df.empty:
 else:
     st.title("📊 Live Evaluation Dashboard")
     st.info("Awaiting submissions...")
+
 
 

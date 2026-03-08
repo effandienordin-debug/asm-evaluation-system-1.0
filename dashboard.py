@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 # --- Page Config ---
 st.set_page_config(page_title="ASM Result Dashboard", layout="wide")
 
-# --- FORCED WHITE THEME CSS ---
+# --- FORCED WHITE THEME & TABLE WRAPPING CSS ---
 st.markdown("""
     <style>
     .stApp { background-color: #FFFFFF !important; color: #000000 !important; }
@@ -21,10 +21,27 @@ st.markdown("""
         margin-bottom: 10px;
         font-weight: bold;
     }
-    /* This helps ensure the dataframe cells allow for more vertical space */
-    [data-testid="stDataFrame"] div[class*="st-"] {
+    /* Custom Styling for the wrapping table */
+    .wrapped-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: sans-serif;
+        font-size: 14px;
+    }
+    .wrapped-table th {
+        background-color: #f3f4f6;
+        border: 1px solid #e5e7eb;
+        padding: 12px;
+        text-align: left;
+        color: #1f2937;
+    }
+    .wrapped-table td {
+        border: 1px solid #e5e7eb;
+        padding: 12px;
+        vertical-align: top;
+        word-wrap: break-word;
         white-space: normal !important;
-        word-wrap: break-word !important;
+        line-height: 1.5;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -32,7 +49,7 @@ st.markdown("""
 # --- Database Connection ---
 conn = st.connection("postgresql", type="sql")
 
-# Define Official Criteria (Matching the SQL column names)
+# Define Official Criteria
 CRITERIA_COLS = [
     'strategic_alignment', 'potential_impact', 'feasibility', 
     'budget_justification', 'timeline_readiness', 'execution_strategy'
@@ -88,33 +105,35 @@ if not df.empty:
             fig_radar.update_layout(template="plotly_white", polar=dict(radialaxis=dict(range=[0, 5])))
             st.plotly_chart(fig_radar, use_container_width=True, key=f"radar_{proposal}")
 
-        # 3. Table with Multi-line Comment Support
+        # 3. Table with Manual HTML Injection for Multi-line Support
         with st.expander(f"View Raw Data for {proposal}", expanded=True):
-            display_cols = ['evaluator'] + CRITERIA_COLS + ['total', 'recommendation']
+            # Building HTML Table string
+            table_html = """<table class='wrapped-table'>
+                            <thead>
+                                <tr>
+                                    <th>Evaluator</th>
+                                    <th>Total</th>
+                                    <th>Recommendation</th>
+                                    <th>Comments</th>
+                                </tr>
+                            </thead>
+                            <tbody>"""
             
-            # Setup column configuration
-            col_config = {
-                "evaluator": st.column_config.TextColumn("Evaluator", width="small"),
-                "total": st.column_config.NumberColumn("Total", format="%.2f", width="small"),
-                "recommendation": st.column_config.TextColumn("Rec.", width="small")
-            }
-
-            if 'comments' in prop_df.columns:
-                display_cols.append('comments')
-                # We use "large" width for comments to give it maximum room
-                col_config["comments"] = st.column_config.TextColumn(
-                    "Evaluator Comments", 
-                    width="large"
-                )
+            for _, row in prop_df.iterrows():
+                comment_text = row.get('comments', '-') if pd.notnull(row.get('comments')) else "-"
+                rec_text = row.get('recommendation', '-') if pd.notnull(row.get('recommendation')) else "-"
+                
+                table_html += f"""
+                    <tr>
+                        <td><b>{row['evaluator']}</b></td>
+                        <td>{row['total']:.2f}</td>
+                        <td>{rec_text}</td>
+                        <td>{comment_text}</td>
+                    </tr>
+                """
             
-            # Note: st.dataframe will show text, but for massive comments 
-            # to be fully visible without interaction, we use use_container_width
-            st.dataframe(
-                prop_df[display_cols], 
-                hide_index=True, 
-                column_config=col_config,
-                use_container_width=True
-            )
+            table_html += "</tbody></table>"
+            st.markdown(table_html, unsafe_allow_html=True)
         
         st.divider()
 else:

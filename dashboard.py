@@ -26,23 +26,31 @@ st.markdown("""
         width: 100%;
         border-collapse: collapse;
         font-family: sans-serif;
-        font-size: 14px;
+        font-size: 13px;
+        table-layout: fixed; /* Ensures columns stay proportional */
     }
     .wrapped-table th {
         background-color: #f3f4f6;
         border: 1px solid #e5e7eb;
-        padding: 12px;
+        padding: 8px;
         text-align: left;
         color: #1f2937;
+        word-wrap: break-word;
     }
     .wrapped-table td {
         border: 1px solid #e5e7eb;
-        padding: 12px;
+        padding: 8px;
         vertical-align: top;
         word-wrap: break-word;
         white-space: normal !important;
-        line-height: 1.5;
+        line-height: 1.4;
     }
+    /* Column Width Management */
+    .col-eval { width: 10%; }
+    .col-crit { width: 7%; text-align: center; }
+    .col-total { width: 6%; font-weight: bold; text-align: center; }
+    .col-rec { width: 10%; }
+    .col-comm { width: 25%; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -87,7 +95,6 @@ if not df.empty:
 
         # 2. Visuals
         c1, c2 = st.columns([1, 1])
-        
         with c1:
             fig_bar = px.bar(prop_df, x='evaluator', y='total', range_y=[0,5], 
                              title=f"Total Scores for {proposal}",
@@ -105,30 +112,37 @@ if not df.empty:
             fig_radar.update_layout(template="plotly_white", polar=dict(radialaxis=dict(range=[0, 5])))
             st.plotly_chart(fig_radar, use_container_width=True, key=f"radar_{proposal}")
 
-        # 3. Table with Manual HTML Injection for Multi-line Support
-        with st.expander(f"View Raw Data for {proposal}", expanded=True):
-            # Building HTML Table string
-            table_html = """<table class='wrapped-table'>
+        # 3. Table with All Criteria and Text Wrapping
+        with st.expander(f"View Detailed Reviews for {proposal}", expanded=True):
+            # Building Header
+            header_row = "".join([f"<th class='col-crit'>{c.replace('_', ' ').title()}</th>" for c in CRITERIA_COLS])
+            
+            table_html = f"""<table class='wrapped-table'>
                             <thead>
                                 <tr>
-                                    <th>Evaluator</th>
-                                    <th>Total</th>
-                                    <th>Recommendation</th>
-                                    <th>Comments</th>
+                                    <th class='col-eval'>Evaluator</th>
+                                    {header_row}
+                                    <th class='col-total'>Total</th>
+                                    <th class='col-rec'>Recommendation</th>
+                                    <th class='col-comm'>Comments</th>
                                 </tr>
                             </thead>
                             <tbody>"""
             
             for _, row in prop_df.iterrows():
+                # Extract Criteria Scores
+                crit_data = "".join([f"<td class='col-crit'>{row.get(c, 0)}</td>" for c in CRITERIA_COLS])
+                
                 comment_text = row.get('comments', '-') if pd.notnull(row.get('comments')) else "-"
                 rec_text = row.get('recommendation', '-') if pd.notnull(row.get('recommendation')) else "-"
                 
                 table_html += f"""
                     <tr>
-                        <td><b>{row['evaluator']}</b></td>
-                        <td>{row['total']:.2f}</td>
-                        <td>{rec_text}</td>
-                        <td>{comment_text}</td>
+                        <td class='col-eval'><b>{row['evaluator']}</b></td>
+                        {crit_data}
+                        <td class='col-total'>{row['total']:.2f}</td>
+                        <td class='col-rec'>{rec_text}</td>
+                        <td class='col-comm'>{comment_text}</td>
                     </tr>
                 """
             

@@ -85,18 +85,35 @@ if not df.empty:
             fig_radar.update_layout(template="plotly_white", polar=dict(radialaxis=dict(range=[0, 5])))
             st.plotly_chart(fig_radar, use_container_width=True, key=f"radar_{proposal}")
 
-        # 3. Table with Updated Column Name 'comments'
+        # 3. Table with Adjusted Comments Section
         with st.expander(f"View Raw Data for {proposal}"):
-            # Build display columns
             display_cols = ['evaluator'] + CRITERIA_COLS + ['total', 'recommendation']
             
-            # Check for the 'comments' column instead of 'justification'
+            # Setup column configuration for better readability
+            col_config = {
+                "evaluator": st.column_config.TextColumn("Evaluator", width="medium"),
+                "total": st.column_config.NumberColumn("Total", format="%.2f"),
+                "recommendation": st.column_config.TextColumn("Recommendation")
+            }
+
             if 'comments' in prop_df.columns:
                 display_cols.append('comments')
+                # Make the comments column wide and enable text wrapping
+                col_config["comments"] = st.column_config.TextColumn(
+                    "Evaluator Comments", 
+                    width="large",
+                    help="Full justification from the evaluator"
+                )
             else:
                 st.warning("⚠️ Note: 'comments' column not found in database.")
                 
-            st.dataframe(prop_df[display_cols], hide_index=True)
+            # Render the dataframe with the specific column configuration
+            st.dataframe(
+                prop_df[display_cols], 
+                hide_index=True, 
+                column_config=col_config,
+                use_container_width=True
+            )
         
         st.divider()
 else:

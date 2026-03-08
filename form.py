@@ -50,7 +50,7 @@ def check_auth():
     if "code" in params:
         flow = st.session_state.get("auth_flow")
         if not flow:
-            st.error("⚠️ State Mismatch / Session Expired. Please use 'Force Reset' below.")
+            st.error("⚠️ State Mismatch or Session Expired. Please use 'Force Reset' and try again.")
         else:
             try:
                 app = get_msal_app()
@@ -70,7 +70,7 @@ def check_auth():
                         st.query_params.clear()
                         st.rerun()
                     else:
-                        st.error(f"❌ Access Denied: {email} is not in the database.")
+                        st.error(f"❌ Access Denied: {email} is not authorized in this system.")
                         st.stop()
                 else:
                     st.error(f"Microsoft Error: {result.get('error_description')}")
@@ -82,38 +82,48 @@ def check_auth():
 
     # LOGIN UI
     st.title("🛡️ ASM Evaluator Portal")
-    st.info("Authorized Personnel Only")
+    
+    # 3.1 EMAIL-FIRST SSO INPUT
+    st.subheader("Sign In")
+    user_email_input = st.text_input("Enter your Organization Email", placeholder="user@company.com")
 
     if st.session_state["auth_flow"] is None:
         try:
             app = get_msal_app()
+            # We initiate flow here. The actual URL is updated below with the email hint.
             st.session_state["auth_flow"] = app.initiate_auth_code_flow(["User.Read"], redirect_uri=REDIRECT_URI)
         except Exception as e:
             st.error(f"Could not connect to Microsoft: {e}")
             st.stop()
 
+    # Generate Auth URL with the email hint if provided
     auth_url = st.session_state["auth_flow"].get("auth_uri")
+    if user_email_input:
+        auth_url += f"&login_hint={user_email_input}"
 
-    # MODIFIED: target="_blank" opens login in a NEW TAB
-    st.markdown(
-        f"""
-        <div style="text-align: center; margin-top: 50px;">
-            <a href="{auth_url}" target="_blank" style="
-                text-decoration: none; background-color: #1E3A8A; color: white; 
-                padding: 25px 50px; border-radius: 12px; font-weight: bold; 
-                font-size: 24px; display: inline-block; box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-            ">🚀 SIGN IN WITH MICROSOFT</a>
-            <p style="margin-top: 15px; color: gray;">(Opens in a new tab)</p>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-    
+    # Visual Sign-In Button
+    if user_email_input:
+        st.markdown(
+            f"""
+            <div style="text-align: center; margin-top: 20px;">
+                <a href="{auth_url}" target="_blank" style="
+                    text-decoration: none; background-color: #1E3A8A; color: white; 
+                    padding: 18px 35px; border-radius: 8px; font-weight: bold; 
+                    font-size: 18px; display: inline-block; box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+                ">CONTINUE WITH MICROSOFT →</a>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    else:
+        st.warning("Please enter your email address to enable the Microsoft Sign-In button.")
+
     st.divider()
+    
+    # 3.2 TROUBLESHOOTING & ADMIN
     col_a, col_b = st.columns(2)
     with col_a:
-        # ENHANCED RESET: Clears everything to force a new flow generation
-        if st.button("🔄 Force Reset Connection", use_container_width=True):
+        if st.button("🔄 Force Reset Connection", use_container_width=True, help="Clears all session data if you get stuck"):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.query_params.clear()
@@ -122,7 +132,7 @@ def check_auth():
     with col_b:
         with st.expander("🔑 Admin/Local Login"):
             with st.form("local_login"):
-                u_name = st.text_input("Name")
+                u_name = st.text_input("Username")
                 u_pass = st.text_input("Password", type="password")
                 if st.form_submit_button("Login", use_container_width=True):
                     res = conn.query("SELECT value FROM settings WHERE key = 'evaluator_password' LIMIT 1", ttl=0)
@@ -133,7 +143,7 @@ def check_auth():
                         st.rerun()
     st.stop()
 
-# --- 4. EXECUTE AUTH ---
+# --- 4. EXECUTE AUTH CHECK ---
 check_auth()
 
 # --- 5. LOGOUT ---
@@ -143,10 +153,11 @@ if st.sidebar.button("🚪 Logout", use_container_width=True):
     st.markdown(f'<meta http-equiv="refresh" content="0;URL=\'{logout_url}\'">', unsafe_allow_html=True)
     st.stop()
 
-# --- 6. APP CONTENT (REMAINING CODE UNCHANGED) ---
+# --- 6. MAIN APP CONTENT ---
 current_user = st.session_state["current_user"]
 st_autorefresh(interval=30000, key="evaluator_heartbeat")
 
+# Navigation helper functions
 def nav_to_summary():
     st.session_state.proposal_selector = "-- Select --"
     st.session_state.is_editing = False
@@ -163,6 +174,7 @@ def get_cloud_list(table, column):
 
 PROPOSALS = get_cloud_list("proposals", "title")
 
+# Profile Header
 col_img, col_txt = st.columns([1, 4])
 with col_img:
     img_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{current_user.replace(' ', '_')}.png"
@@ -171,6 +183,7 @@ with col_img:
 with col_txt:
     st.title(f"Welcome, {current_user}")
 
+# Progress Data
 try:
     scored_df = conn.query("SELECT proposal_title, total, recommendation, comments FROM scores WHERE evaluator = :ev", params={"ev": current_user}, ttl=0)
     completed_proposals = scored_df['proposal_title'].tolist() if not scored_df.empty else []
@@ -185,7 +198,7 @@ st.divider()
 if "proposal_selector" not in st.session_state:
     st.session_state.proposal_selector = "-- Select --"
 
-selected_proposal = st.selectbox("Select Proposal", ["-- Select --"] + PROPOSALS, key="proposal_selector")
+selected_proposal = st.selectbox("Select Proposal to Evaluate", ["-- Select --"] + PROPOSALS, key="proposal_selector")
 
 if selected_proposal != "-- Select --":
     query = "SELECT * FROM scores WHERE evaluator = :ev AND proposal_title = :prop LIMIT 1;"

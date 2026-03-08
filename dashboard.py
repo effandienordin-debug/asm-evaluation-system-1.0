@@ -9,10 +9,10 @@ from reportlab.lib.pagesizes import landscape, A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 
-# --- Page Config ---
+# --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="ASM Result Dashboard", layout="wide")
 
-# --- CSS STYLES (Same as before) ---
+# --- 2. CSS STYLES (Updated for better text wrapping) ---
 st.markdown("""
     <style>
     .stApp { background-color: #FFFFFF !important; color: #000000 !important; }
@@ -26,12 +26,22 @@ st.markdown("""
         width: 100%; border-collapse: collapse; font-family: sans-serif; font-size: 13px; table-layout: fixed;
     }
     .wrapped-table th { background-color: #f3f4f6; border: 1px solid #e5e7eb; padding: 8px; text-align: left; }
-    .wrapped-table td { border: 1px solid #e5e7eb; padding: 8px; vertical-align: top; word-wrap: break-word; line-height: 1.4; }
+    .wrapped-table td { 
+        border: 1px solid #e5e7eb; padding: 8px; vertical-align: top; 
+        word-wrap: break-word; overflow-wrap: break-word; line-height: 1.4; 
+    }
     .comment-bubble { background-color: #f0f2f6; border-radius: 10px; padding: 12px; margin: 2px 0; font-size: 13px; }
+    
+    /* Specific column widths for the web table */
+    .col-eval { width: 12%; }
+    .col-crit { width: 7%; text-align: center; }
+    .col-total { width: 6%; text-align: center; font-weight: bold; }
+    .col-rec { width: 12%; }
+    .col-comm { width: 28%; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- PDF Generation Logic (Updated for Comments) ---
+# --- 3. PDF GENERATION LOGIC ---
 def generate_pdf(dataframe, criteria_cols):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -43,10 +53,9 @@ def generate_pdf(dataframe, criteria_cols):
     styles = getSampleStyleSheet()
     timestamp = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
     
-    # Custom styles for PDF
     comment_style = styles["BodyText"]
     comment_style.fontSize = 7
-    comment_style.leading = 9 # line spacing
+    comment_style.leading = 9 
     
     title_style = styles["Title"]
     title_style.textColor = colors.HexColor("#1E3A8A")
@@ -55,22 +64,18 @@ def generate_pdf(dataframe, criteria_cols):
     elements.append(Spacer(1, 12))
 
     available_width = 781 
-    # Header: Proposal, Evaluator, C1, C2, C3, C4, C5, C6, Total, Rec
     headers = ['Proposal', 'Evaluator'] + [c.replace('_', ' ').title().split(' ')[0] for c in criteria_cols] + ['Total', 'Rec']
     
     col_widths = [
-        available_width * 0.28, # Proposal
-        available_width * 0.12, # Evaluator
+        available_width * 0.28, available_width * 0.12, 
         available_width * 0.065, available_width * 0.065, available_width * 0.065, 
         available_width * 0.065, available_width * 0.065, available_width * 0.065,
-        available_width * 0.05, # Total
-        available_width * 0.09  # Rec
+        available_width * 0.05, available_width * 0.09
     ]
 
     data = [headers]
 
     for _, row in dataframe.iterrows():
-        # Row 1: The Scores
         score_row = [
             Paragraph(str(row.get('proposal_title', '-')), comment_style),
             Paragraph(str(row.get('evaluator', '-')), comment_style),
@@ -82,18 +87,12 @@ def generate_pdf(dataframe, criteria_cols):
         score_row.append(str(row.get('recommendation', '-')))
         data.append(score_row)
 
-        # Row 2: The Comment (Spanning across the table)
         raw_comm = str(row.get('comments', 'No comments provided.'))
         comment_text = f"<b>Comments:</b> {raw_comm}"
-        
-        # We create a row where the first cell contains the comment and we will merge it later
         comment_row = [Paragraph(comment_text, comment_style), "", "", "", "", "", "", "", "", ""]
         data.append(comment_row)
 
-    # Build Table
     t = Table(data, colWidths=col_widths, repeatRows=1)
-    
-    # Styling logic
     table_styles = [
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#1E3A8A")),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -103,20 +102,15 @@ def generate_pdf(dataframe, criteria_cols):
         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
     ]
 
-    # Loop to apply merging and background colors to comment rows
-    # Every even row (starting from index 2) is a comment row
     for i in range(1, len(data)):
         if i % 2 == 0:
-            # Merge the comment across all columns
             table_styles.append(('SPAN', (0, i), (-1, i)))
             table_styles.append(('ALIGN', (0, i), (-1, i), 'LEFT'))
             table_styles.append(('BACKGROUND', (0, i), (-1, i), colors.HexColor("#F0F2F6")))
         else:
-            # Normal score row background
             table_styles.append(('BACKGROUND', (0, i), (-1, i), colors.whitesmoke))
 
     t.setStyle(TableStyle(table_styles))
-    
     elements.append(t)
 
     def add_footer(canvas, doc):
@@ -130,14 +124,14 @@ def generate_pdf(dataframe, criteria_cols):
     buffer.seek(0)
     return buffer
 
-# --- Database Connection ---
+# --- 4. DATABASE & SESSION STATE ---
 conn = st.connection("postgresql", type="sql")
 CRITERIA_COLS = ['strategic_alignment', 'potential_impact', 'feasibility', 'budget_justification', 'timeline_readiness', 'execution_strategy']
 
-# --- SIDEBAR: ADMIN ACCESS ---
 if "admin_authenticated" not in st.session_state:
     st.session_state["admin_authenticated"] = False
 
+# --- 5. SIDEBAR: ADMIN ACCESS ---
 with st.sidebar:
     st.title("🔐 Admin Controls")
     
@@ -170,7 +164,7 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"Error: {e}")
 
-# --- DASHBOARD UI (Rest of the code remains the same) ---
+# --- 6. DASHBOARD UI ---
 col_ref1, col_ref2 = st.columns([6, 1])
 with col_ref2:
     auto_refresh = st.toggle("🔄 Auto", value=True)
@@ -197,12 +191,14 @@ if not df.empty:
         c1, c2 = st.columns([1, 1])
         with c1:
             fig_bar = px.bar(prop_df, x='evaluator', y='total', range_y=[0,5], title="Scores", color='total', color_continuous_scale='GnBu')
-            st.plotly_chart(fig_bar, use_container_width=True)
+            # FIX: Added unique key for Plotly Chart
+            st.plotly_chart(fig_bar, use_container_width=True, key=f"bar_{proposal}")
         with c2:
             avg_crit = prop_df[CRITERIA_COLS].mean()
             fig_radar = go.Figure(data=go.Scatterpolar(r=avg_crit.values, theta=[c.replace('_', ' ').title() for c in CRITERIA_COLS], fill='toself', line_color='#1E3A8A'))
             fig_radar.update_layout(polar=dict(radialaxis=dict(range=[0, 5])))
-            st.plotly_chart(fig_radar, use_container_width=True)
+            # FIX: Added unique key for Plotly Chart
+            st.plotly_chart(fig_radar, use_container_width=True, key=f"radar_{proposal}")
 
         with st.expander(f"View Detailed Reviews for {proposal}", expanded=True):
             header_row = "".join([f"<th class='col-crit'>{c.replace('_', ' ').title()}</th>" for c in CRITERIA_COLS])
@@ -211,11 +207,20 @@ if not df.empty:
                 crit_data = "".join([f"<td class='col-crit'>{row.get(c, 0)}</td>" for c in CRITERIA_COLS])
                 raw_comm = str(row.get('comments', '-'))
                 formatted_comment = "".join([f"<p> {line.strip()}</p>" for line in raw_comm.split('\n') if line.strip()])
-                table_html += f"<tr><td><b>{row['evaluator']}</b></td>{crit_data}<td>{row['total']:.2f}</td><td>{row.get('recommendation', '-')}</td><td><div class='comment-bubble'>{formatted_comment}</div></td></tr>"
+                
+                # Table row with specific CSS classes for wrapping and alignment
+                table_html += f"""
+                <tr>
+                    <td class='col-eval'><b>{row['evaluator']}</b></td>
+                    {crit_data}
+                    <td class='col-total'>{row['total']:.2f}</td>
+                    <td class='col-rec'>{row.get('recommendation', '-')}</td>
+                    <td class='col-comm'><div class='comment-bubble'>{formatted_comment}</div></td>
+                </tr>
+                """
             table_html += "</tbody></table>"
             st.markdown(table_html, unsafe_allow_html=True)
         st.divider()
 else:
     st.title("📊 Live Evaluation Dashboard")
     st.info("Awaiting submissions...")
-

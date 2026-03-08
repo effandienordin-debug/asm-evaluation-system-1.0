@@ -53,14 +53,14 @@ if not st.session_state["selected_proposal"]:
     st.title(f"👋 Welcome, {evaluator_name}")
     
     with st.container():
-        st.markdown("""
+        st.markdown(f"""
         ### 📋 About the ASM Evaluation Portal
         This system is designed for evaluators to review and score project proposals systematically. 
         
         **How to use this page:**
         1. **Review Assignments:** See proposals assigned to you below.
         2. **Evaluate:** Click **'Evaluate'** to start or **'Edit Review'** to update.
-        3. **Scoring:** Provide scores (1.0 - 5.0).
+        3. **Scoring:** Provide scores (**0.0 - 5.0**).
         """)
         
         with st.expander("🔍 View Scoring Criteria Details"):
@@ -117,7 +117,7 @@ if st.button("⬅️ Cancel and Return to List"):
     st.rerun()
 
 with st.form("evaluation_form"):
-    st.markdown("### Scoring (1.0 - 5.0)")
+    st.markdown("### Scoring (0.0 - 5.0)")
     scores = {}
     
     grid_cols = st.columns(2)
@@ -130,7 +130,7 @@ with st.form("evaluation_form"):
         with grid_cols[i % 2]:
             scores[label] = st.number_input(
                 f"{label} (Weight: {int(weight*100)}%)", 
-                min_value=1.0, max_value=5.0, value=default_val, 
+                min_value=0.0, max_value=5.0, value=default_val, 
                 step=0.1, format="%.1f"
             )
     
@@ -143,8 +143,6 @@ with st.form("evaluation_form"):
     if not existing_data.empty:
         raw_rec = existing_data.iloc[0]['recommendation']
         if raw_rec:
-            # Split the string back into a list for the multiselect default
-            # Handles "Approve, Revise" -> ["Approve", "Revise"]
             saved_recs = [r.strip() for r in str(raw_rec).split(",")]
             default_recs = [r for r in saved_recs if r in rec_choices]
 
@@ -165,7 +163,6 @@ if submit:
     elif not recommendation_list:
         st.error("⚠️ Please select at least one recommendation.")
     else:
-        # Convert list back to a string to save in the DB
         recommendation_str = ", ".join(recommendation_list)
         total_score = sum(scores[label] * weight for label, weight in CRITERIA)
         

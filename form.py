@@ -19,7 +19,7 @@ CRITERIA = [
 st.set_page_config(page_title="ASM Evaluator Entry", layout="wide")
 conn = st.connection("postgresql", type="sql")
 
-# --- 2. SESSION STATE (FIXED INDENTATION) ---
+# --- 2. SESSION STATE ---
 if "current_user" not in st.session_state:
     st.session_state["current_user"] = None
 if "user_email" not in st.session_state:
@@ -89,25 +89,39 @@ existing_data = conn.query(
     params={"e": evaluator_name, "p": proposal_title}, ttl=0
 )
 
-# --- CANCEL BUTTON (Placed before form for easy exit) ---
+# Cancel button outside form
 if st.button("⬅️ Cancel and Return to List"):
     st.session_state["selected_proposal"] = None
     st.rerun()
 
 with st.form("evaluation_form"):
+    st.markdown("### Scoring (1.0 - 5.0)")
     scores = {}
-    for label, weight in CRITERIA:
+    
+    # Grid for number inputs to keep the form compact
+    grid_cols = st.columns(2)
+    for i, (label, weight) in enumerate(CRITERIA):
         db_col = label.lower().replace(' ', '_')
-        # Check if column exists in the data before trying to access it
         default_val = 3.0
         if not existing_data.empty and db_col in existing_data.columns:
             default_val = float(existing_data.iloc[0][db_col])
         
-        scores[label] = st.slider(f"{label} (Weight: {int(weight*100)}%)", 1.0, 5.0, default_val, 0.5)
+        # Using number_input instead of slider
+        with grid_cols[i % 2]:
+            scores[label] = st.number_input(
+                f"{label} (Weight: {int(weight*100)}%)", 
+                min_value=1.0, 
+                max_value=5.0, 
+                value=default_val, 
+                step=0.1,
+                format="%.1f"
+            )
     
-    rec_choices = ["Highly Recommended", "Recommended", "Recommended with Revisions", "Not Recommended"]
+    st.divider()
     
-    # Safety check for index to prevent ValueError
+    # Updated Recommendation options
+    rec_choices = ["Approve", "Revise", "Reject", "Combined/Merge"]
+    
     rec_index = 0
     if not existing_data.empty:
         rec_val = existing_data.iloc[0]['recommendation']
@@ -122,14 +136,15 @@ with st.form("evaluation_form"):
         
     comments = st.text_area("Justification/Comments", value=comm_val, height=150)
     
-    # The ONLY submit button for the form
     submit = st.form_submit_button("Save Evaluation", type="primary")
 
 if submit:
     if not comments.strip():
         st.error("⚠️ Please provide justification comments.")
     else:
+        # Calculate total weighted score
         total_score = sum(scores[label] * weight for label, weight in CRITERIA)
+        
         with conn.session as s:
             s.execute(text("DELETE FROM scores WHERE evaluator = :e AND proposal_title = :p"), {"e": evaluator_name, "p": proposal_title})
             s.execute(text("""

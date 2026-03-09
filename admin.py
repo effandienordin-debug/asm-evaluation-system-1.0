@@ -17,7 +17,7 @@ cache_buster = datetime.now().strftime("%Y%m%d%H%M%S")
 # Standard Blank User Icon URL
 BLANK_ICON = "https://cdn-icons-png.flaticon.com/512/149/149071.png"
 
-# Initialize Cookie Manager SAFELY (No @st.cache to avoid Widget Warning)
+# Initialize Cookie Manager SAFELY
 try:
     cookie_manager = stx.CookieManager(key="main_cookie_manager")
 except Exception:
@@ -30,6 +30,8 @@ if "username" not in st.session_state:
     st.session_state["username"] = None
 if "user_role" not in st.session_state:
     st.session_state["user_role"] = "Viewer"
+if "logout_clicked" not in st.session_state:
+    st.session_state["logout_clicked"] = False
 
 def load_secret(key):
     if key in st.secrets:
@@ -197,26 +199,34 @@ def edit_user_dialog(user_id, username, role):
             s.commit()
         st.success("User updated!"); time.sleep(1); st.rerun()
 
-# --- 3. LOGIN LOGIC ---
+# --- 3. LOGIN LOGIC (FIXED) ---
 def check_password():
-    if st.session_state.get("authenticated"): 
-        return True
+    # 1. If logout was just clicked, ignore cookies and show login form
+    if st.session_state.get("logout_clicked"):
+        # Reset the flag so that after the user logs in manually, they aren't stuck here
+        pass
+    else:
+        # 2. Check if already authenticated in this session
+        if st.session_state.get("authenticated"): 
+            return True
+        
+        # 3. Check for persistent cookie (Auto-login)
+        if cookie_manager:
+            try:
+                saved_user = cookie_manager.get(cookie="asm_admin_user")
+                if saved_user:
+                    user_check = conn.query("SELECT username, role FROM users WHERE username = :u", params={"u": saved_user}, ttl=0)
+                    if not user_check.empty:
+                        st.session_state.update({
+                            "authenticated": True, 
+                            "username": user_check.iloc[0]['username'], 
+                            "user_role": user_check.iloc[0]['role']
+                        })
+                        return True
+            except Exception:
+                pass 
     
-    if cookie_manager:
-        try:
-            saved_user = cookie_manager.get(cookie="asm_admin_user")
-            if saved_user:
-                user_check = conn.query("SELECT username, role FROM users WHERE username = :u", params={"u": saved_user}, ttl=0)
-                if not user_check.empty:
-                    st.session_state.update({
-                        "authenticated": True, 
-                        "username": user_check.iloc[0]['username'], 
-                        "user_role": user_check.iloc[0]['role']
-                    })
-                    return True
-        except Exception:
-            pass 
-    
+    # 4. Show Login Form
     st.markdown("<h1 style='text-align: center;'>🛡️ ASM Admin Access</h1>", unsafe_allow_html=True)
     _, center, _ = st.columns([1, 1.5, 1])
     with center:
@@ -226,6 +236,8 @@ def check_password():
             if st.form_submit_button("Sign In", use_container_width=True):
                 user_data = conn.query("SELECT username, password_hash, role FROM users WHERE LOWER(username) = LOWER(:u)", params={"u": u_input}, ttl=0)
                 if not user_data.empty and str(user_data.iloc[0]['password_hash']) == p_input:
+                    # Successful login: reset logout flag and set session
+                    st.session_state["logout_clicked"] = False
                     st.session_state.update({
                         "authenticated": True, 
                         "username": user_data.iloc[0]['username'], 
@@ -255,7 +267,6 @@ with st.sidebar:
     menu_options = ["📊 Tracker", "📋 Proposals", "👤 Evaluators & Links", "📜 History"]
     if st.session_state.get("user_role") == "SuperAdmin": menu_options.append("🔑 User Management")
     
-    # ADDED KEY FOR STATE TRACKING
     menu_choice = st.radio("Go to Section:", menu_options, key="admin_nav_radio")
     
     st.divider()
@@ -264,16 +275,20 @@ with st.sidebar:
     if auto_refresh:
         st_autorefresh(interval=10000, key="data_refresh")
     st.divider()
+    
+    # --- LOGOUT BUTTON (FIXED) ---
     if st.button("🚪 Logout", use_container_width=True):
+        st.session_state["logout_clicked"] = True
         if cookie_manager:
             try: cookie_manager.delete("asm_admin_user")
             except Exception: pass
-        st.session_state.clear()
+        st.session_state["authenticated"] = False
+        st.session_state["username"] = None
+        st.session_state["user_role"] = "Viewer"
+        time.sleep(0.5) # Allow cookie deletion to settle
         st.rerun()
 
 # --- 6. MAIN CONTENT WRAPPER ---
-# Using st.empty() as a container ensures that when menu_choice changes, 
-# the entire previous view is "flushed" from the UI.
 main_view = st.empty()
 
 with main_view.container():

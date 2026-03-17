@@ -174,23 +174,34 @@ if not df.empty:
 
         # --- FIXED INDENTATION HERE ---
         with st.expander(f"View Detailed Reviews for {proposal}", expanded=True):
+            # 1. Build Header
             header_row = "".join([f"<th class='col-crit'>{c.replace('_', ' ').title()}</th>" for c in CRITERIA_COLS])
+            
+            # 2. Start Table (Ensure no leading spaces in the string)
             table_html = f"<table class='wrapped-table'><thead><tr><th class='col-eval'>Evaluator</th>{header_row}<th class='col-total'>Total</th><th class='col-rec'>Recommendation</th><th class='col-comm'>Comments</th></tr></thead><tbody>"
             
+            # 3. Add Rows (Using single lines to avoid indentation spaces)
             for _, row in prop_df.iterrows():
                 crit_data = "".join([f"<td class='col-crit'>{row.get(c, 0)}</td>" for c in CRITERIA_COLS])
-                raw_comm = str(row.get('comments', '-')).replace('\n', '<br>')
                 
-                table_html += f"""
-                <tr>
-                    <td class='col-eval'><b>{row['evaluator']}</b></td>
-                    {crit_data}
-                    <td class='col-total'>{row['total']:.2f}</td>
-                    <td class='col-rec'>{row.get('recommendation', '-')}</td>
-                    <td class='col-comm'><div class='comment-bubble'>{raw_comm}</div></td>
-                </tr>
-                """
+                # Format comments with line breaks
+                raw_comm = str(row.get('comments', '-')).replace('\n', '<br>')
+                formatted_comment = f"<div class='comment-bubble'>{raw_comm}</div>"
+                
+                # Append row as a single flat string to avoid Markdown code-block interpretation
+                table_html += "<tr>"
+                table_html += f"<td class='col-eval'><b>{row['evaluator']}</b></td>"
+                table_html += f"{crit_data}"
+                table_html += f"<td class='col-total'>{row['total']:.2f}</td>"
+                table_html += f"<td class='col-rec'>{row.get('recommendation', '-')}</td>"
+                table_html += f"<td class='col-comm'>{formatted_comment}</td>"
+                table_html += "</tr>"
+            
+            # 4. Close and Render
             table_html += "</tbody></table>"
+            
+            # IMPORTANT: Use st.html if your streamlit version is 1.34+, 
+            # otherwise keep using st.markdown
             st.markdown(table_html, unsafe_allow_html=True)
 else:
     st.title("📊 Live Evaluation Dashboard")

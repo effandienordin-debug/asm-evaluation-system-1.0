@@ -16,28 +16,46 @@ st.set_page_config(page_title="ASM Result Dashboard", layout="wide")
 # --- 2. CSS STYLES ---
 st.markdown("""
     <style>
+    /* Standard Screen Styles */
     .stApp { background-color: #FFFFFF !important; color: #000000 !important; }
     [data-testid="stMetricValue"] { color: #1E3A8A !important; }
-    div[data-testid="stExpander"] { background-color: #F8F9FA !important; border: 1px solid #E5E7EB !important; }
-    .proposal-header { 
-        background-color: #1E3A8A; color: white; padding: 10px; border-radius: 5px; 
-        margin-top: 20px; margin-bottom: 10px; font-weight: bold;
-    }
-    .wrapped-table {
-        width: 100%; border-collapse: collapse; font-family: sans-serif; font-size: 13px; table-layout: fixed;
-    }
-    .wrapped-table th { background-color: #f3f4f6; border: 1px solid #e5e7eb; padding: 8px; text-align: left; }
-    .wrapped-table td { 
-        border: 1px solid #e5e7eb; padding: 8px; vertical-align: top; 
-        word-wrap: break-word; overflow-wrap: break-word; line-height: 1.4; 
-    }
-    .comment-bubble { background-color: #f0f2f6; border-radius: 10px; padding: 12px; margin: 2px 0; font-size: 13px; }
     
-    .col-eval { width: 12%; }
-    .col-crit { width: 7%; text-align: center; }
-    .col-total { width: 6%; text-align: center; font-weight: bold; }
-    .col-rec { width: 12%; }
-    .col-comm { width: 28%; }
+    @media print {
+        /* 1. HIDE UI ELEMENTS */
+        [data-testid="stSidebar"], [data-testid="stHeader"], 
+        [data-testid="stToolbar"], footer, header, .stButton, 
+        [data-testid="stToast"], div[data-testid="stExpander"] button {
+            display: none !important;
+        }
+
+        /* 2. FORCE NEW PAGE FOR EACH PROPOSAL */
+        .proposal-header {
+            page-break-before: always !important; /* Starts each proposal on a new page */
+            margin-top: 0 !important;
+            padding: 15px !important;
+            -webkit-print-color-adjust: exact !important;
+        }
+
+        /* 3. PREVENT DATA SPLITTING */
+        .stMetric, .element-container, .wrapped-table, tr {
+            page-break-inside: avoid !important; /* Prevents rows or charts from being cut in half */
+        }
+
+        /* 4. CLEAN LAYOUT */
+        .main .block-container {
+            padding: 0 !important;
+            margin: 0 !important;
+            max-width: 100% !important;
+        }
+
+        /* 5. SHOW ALL EXPANDERS */
+        /* Forces Streamlit expanders to stay open in the print version */
+        div[data-testid="stExpander"] {
+            display: block !important;
+            height: auto !important;
+            overflow: visible !important;
+        }
+    }
     </style>
     """, unsafe_allow_html=True)
 

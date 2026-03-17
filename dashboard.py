@@ -8,6 +8,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
+from streamlit_autorefresh import st_autorefresh # Moved to top
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="ASM Result Dashboard", layout="wide")
@@ -43,11 +44,7 @@ st.markdown("""
 # --- 3. PDF GENERATION LOGIC ---
 def generate_pdf(dataframe, criteria_cols):
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buffer, 
-        pagesize=landscape(A4),
-        rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=50
-    )
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=50)
     elements = []
     styles = getSampleStyleSheet()
     timestamp = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
@@ -65,12 +62,7 @@ def generate_pdf(dataframe, criteria_cols):
     available_width = 781 
     headers = ['Proposal', 'Evaluator'] + [c.replace('_', ' ').title().split(' ')[0] for c in criteria_cols] + ['Total', 'Rec']
     
-    col_widths = [
-        available_width * 0.28, available_width * 0.12, 
-        available_width * 0.065, available_width * 0.065, available_width * 0.065, 
-        available_width * 0.065, available_width * 0.065, available_width * 0.065,
-        available_width * 0.05, available_width * 0.09
-    ]
+    col_widths = [available_width * 0.28, available_width * 0.12] + [available_width * 0.065]*6 + [available_width * 0.05, available_width * 0.09]
 
     data = [headers]
 
@@ -88,7 +80,7 @@ def generate_pdf(dataframe, criteria_cols):
 
         raw_comm = str(row.get('comments', 'No comments provided.'))
         comment_text = f"<b>Comments:</b> {raw_comm}"
-        comment_row = [Paragraph(comment_text, comment_style), "", "", "", "", "", "", "", "", ""]
+        comment_row = [Paragraph(comment_text, comment_style)] + [""] * (len(headers) - 1)
         data.append(comment_row)
 
     t = Table(data, colWidths=col_widths, repeatRows=1)
@@ -102,7 +94,7 @@ def generate_pdf(dataframe, criteria_cols):
     ]
 
     for i in range(1, len(data)):
-        if i % 2 == 0:
+        if i % 2 == 0: # This is the comment row
             table_styles.append(('SPAN', (0, i), (-1, i)))
             table_styles.append(('ALIGN', (0, i), (-1, i), 'LEFT'))
             table_styles.append(('BACKGROUND', (0, i), (-1, i), colors.HexColor("#F0F2F6")))
@@ -123,31 +115,27 @@ def generate_pdf(dataframe, criteria_cols):
     buffer.seek(0)
     return buffer
 
-# --- 4. DATABASE & AUTHENTICATION CHECK ---
+# --- 4. DATABASE & AUTHENTICATION ---
 conn = st.connection("postgresql", type="sql")
 CRITERIA_COLS = ['strategic_alignment', 'potential_impact', 'feasibility', 'budget_justification', 'timeline_readiness', 'execution_strategy']
 
 if "admin_authenticated" not in st.session_state:
     st.session_state["admin_authenticated"] = False
 
-# --- 5. LOGIN SCREEN ---
 if not st.session_state["admin_authenticated"]:
     st.title("🔐 ASM Dashboard Login")
-    with st.container():
-        st.write("Please enter the administrator password to view results.")
-        admin_pass_input = st.text_input("Password", type="password")
-        if st.button("Access Dashboard", type="primary"):
-            if admin_pass_input == "asm_admin_pass":
-                st.session_state["admin_authenticated"] = True
-                st.rerun()
-            else:
-                st.error("Incorrect Password")
-    st.stop()  # Stop execution here if not logged in
+    admin_pass_input = st.text_input("Password", type="password")
+    if st.button("Access Dashboard", type="primary"):
+        if admin_pass_input == "asm_admin_pass":
+            st.session_state["admin_authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Incorrect Password")
+    st.stop()
 
 # --- 6. AUTHENTICATED SIDEBAR ---
 with st.sidebar:
     st.title("⚙️ Admin Panel")
-    st.success("Access Granted")
     if st.button("🔓 Logout Admin", use_container_width=True):
         st.session_state["admin_authenticated"] = False
         st.rerun()
@@ -155,75 +143,55 @@ with st.sidebar:
     st.divider()
     all_data = conn.query("SELECT * FROM scores ORDER BY proposal_title ASC;", ttl=0)
     if not all_data.empty:
-        try:
-            pdf_file = generate_pdf(all_data, CRITERIA_COLS)
-            st.download_button(
-                label="📥 Download Full PDF",
-                data=pdf_file,
-                file_name=f"ASM_Full_Results_{datetime.now().strftime('%Y%m%d')}.pdf",
-                mime="application/pdf",
-                use_container_width=True
-            )
-        except Exception as e:
-            st.error(f"Error: {e}")
+        pdf_file = generate_pdf(all_data, CRITERIA_COLS)
+        st.download_button(label="📥 Download Full PDF", data=pdf_file, file_name=f"ASM_Full_Report.pdf", mime="application/pdf", use_container_width=True)
 
-# --- 7. DASHBOARD UI (Main Content) ---
-col_ref1, col_ref2 = st.columns([6, 1])
-with col_ref2:
-    auto_refresh = st.toggle("🔄 Auto", value=True)
+# --- 7. DASHBOARD UI ---
+auto_refresh = st.toggle("🔄 Auto Refresh", value=True)
 if auto_refresh:
-    from streamlit_autorefresh import st_autorefresh
     st_autorefresh(interval=10000, key="dashrefresh")
 
 df = conn.query("SELECT * FROM scores;", ttl=0)
 
 if not df.empty:
     st.title("📊 Live Evaluation Dashboard")
-    unique_proposals = df['proposal_title'].unique()
-    
-    for proposal in unique_proposals:
+    for proposal in df['proposal_title'].unique():
         prop_df = df[df['proposal_title'] == proposal].copy()
         st.markdown(f"<div class='proposal-header'>📂 Proposal: {proposal}</div>", unsafe_allow_html=True)
         
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Avg Score", f"{prop_df['total'].mean():.2f}")
         m2.metric("Evaluators", len(prop_df))
-        m3.metric("Max Score", f"{prop_df['total'].max():.2f}")
-        m4.metric("Min Score", f"{prop_df['total'].min():.2f}")
-
-        c1, c2 = st.columns([1, 1])
+        
+        c1, c2 = st.columns(2)
         with c1:
-            fig_bar = px.bar(prop_df, x='evaluator', y='total', range_y=[0,5], title="Scores", color='total', color_continuous_scale='GnBu')
-            st.plotly_chart(fig_bar, use_container_width=True, key=f"bar_{proposal}")
+            st.plotly_chart(px.bar(prop_df, x='evaluator', y='total', range_y=[0,5], title="Scores"), use_container_width=True, key=f"bar_{proposal}")
         with c2:
             avg_crit = prop_df[CRITERIA_COLS].mean()
-            fig_radar = go.Figure(data=go.Scatterpolar(r=avg_crit.values, theta=[c.replace('_', ' ').title() for c in CRITERIA_COLS], fill='toself', line_color='#1E3A8A'))
+            fig_radar = go.Figure(data=go.Scatterpolar(r=avg_crit.values, theta=[c.replace('_', ' ').title() for c in CRITERIA_COLS], fill='toself'))
             fig_radar.update_layout(polar=dict(radialaxis=dict(range=[0, 5])))
             st.plotly_chart(fig_radar, use_container_width=True, key=f"radar_{proposal}")
 
+        # --- FIXED INDENTATION HERE ---
         with st.expander(f"View Detailed Reviews for {proposal}", expanded=True):
-    # Everything below this line must be indented (4 spaces)
-    header_row = "".join([f"<th class='col-crit'>{c.replace('_', ' ').title()}</th>" for c in CRITERIA_COLS])
-    table_html = f"<table class='wrapped-table'><thead><tr><th class='col-eval'>Evaluator</th>{header_row}<th class='col-total'>Total</th><th class='col-rec'>Recommendation</th><th class='col-comm'>Comments</th></tr></thead><tbody>"
-    
-    for _, row in prop_df.iterrows():
-        crit_data = "".join([f"<td class='col-crit'>{row.get(c, 0)}</td>" for c in CRITERIA_COLS])
-        raw_comm = str(row.get('comments', '-'))
-        formatted_comment = "".join([f"<p> {line.strip()}</p>" for line in raw_comm.split('\n') if line.strip()])
-        
-        table_html += f"""
-        <tr>
-            <td class='col-eval'><b>{row['evaluator']}</b></td>
-            {crit_data}
-            <td class='col-total'>{row['total']:.2f}</td>
-            <td class='col-rec'>{row.get('recommendation', '-')}</td>
-            <td class='col-comm'><div class='comment-bubble'>{formatted_comment}</div></td>
-        </tr>
-        """
-    
-    table_html += "</tbody></table>"
-    st.markdown(table_html, unsafe_allow_html=True)
-        st.divider()
+            header_row = "".join([f"<th class='col-crit'>{c.replace('_', ' ').title()}</th>" for c in CRITERIA_COLS])
+            table_html = f"<table class='wrapped-table'><thead><tr><th class='col-eval'>Evaluator</th>{header_row}<th class='col-total'>Total</th><th class='col-rec'>Recommendation</th><th class='col-comm'>Comments</th></tr></thead><tbody>"
+            
+            for _, row in prop_df.iterrows():
+                crit_data = "".join([f"<td class='col-crit'>{row.get(c, 0)}</td>" for c in CRITERIA_COLS])
+                raw_comm = str(row.get('comments', '-')).replace('\n', '<br>')
+                
+                table_html += f"""
+                <tr>
+                    <td class='col-eval'><b>{row['evaluator']}</b></td>
+                    {crit_data}
+                    <td class='col-total'>{row['total']:.2f}</td>
+                    <td class='col-rec'>{row.get('recommendation', '-')}</td>
+                    <td class='col-comm'><div class='comment-bubble'>{raw_comm}</div></td>
+                </tr>
+                """
+            table_html += "</tbody></table>"
+            st.markdown(table_html, unsafe_allow_html=True)
 else:
     st.title("📊 Live Evaluation Dashboard")
     st.info("Awaiting submissions...")

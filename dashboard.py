@@ -146,63 +146,76 @@ with st.sidebar:
         pdf_file = generate_pdf(all_data, CRITERIA_COLS)
         st.download_button(label="📥 Download Full PDF", data=pdf_file, file_name=f"ASM_Full_Report.pdf", mime="application/pdf", use_container_width=True)
 
-# --- 7. DASHBOARD UI ---
-auto_refresh = st.toggle("🔄 Auto Refresh", value=True)
+# --- 7. DASHBOARD UI (Main Content) ---
+col_ref1, col_ref2 = st.columns([6, 1])
+with col_ref2:
+    auto_refresh = st.toggle("🔄 Auto", value=True)
 if auto_refresh:
+    from streamlit_autorefresh import st_autorefresh
     st_autorefresh(interval=10000, key="dashrefresh")
 
 df = conn.query("SELECT * FROM scores;", ttl=0)
 
 if not df.empty:
     st.title("📊 Live Evaluation Dashboard")
-    for proposal in df['proposal_title'].unique():
+    unique_proposals = df['proposal_title'].unique()
+    
+    for proposal in unique_proposals:
         prop_df = df[df['proposal_title'] == proposal].copy()
+        avg_score = prop_df['total'].mean()
+        # Rubric Percentage calculation: (Avg Score / Max Possible 5.0) * 100
+        score_percentage = (avg_score / 5.0) * 100
+
         st.markdown(f"<div class='proposal-header'>📂 Proposal: {proposal}</div>", unsafe_allow_html=True)
         
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Avg Score", f"{prop_df['total'].mean():.2f}")
-        m2.metric("Evaluators", len(prop_df))
-        
-        c1, c2 = st.columns(2)
+        # --- ADDED METRICS: MIN, MEDIAN, PERCENTAGE ---
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        m1.metric("Avg Score", f"{avg_score:.2f}")
+        m2.metric("Percentage", f"{score_percentage:.1f}%")
+        m3.metric("Median", f"{prop_df['total'].median():.2f}")
+        m4.metric("Min Score", f"{prop_df['total'].min():.2f}")
+        m5.metric("Max Score", f"{prop_df['total'].max():.2f}")
+        m6.metric("Evaluators", len(prop_df))
+
+        c1, c2 = st.columns([1, 1])
         with c1:
-            st.plotly_chart(px.bar(prop_df, x='evaluator', y='total', range_y=[0,5], title="Scores"), use_container_width=True, key=f"bar_{proposal}")
+            fig_bar = px.bar(prop_df, x='evaluator', y='total', range_y=[0,5], 
+                             title="Scores by Evaluator", color='total', color_continuous_scale='GnBu')
+            st.plotly_chart(fig_bar, use_container_width=True, key=f"bar_{proposal}")
         with c2:
             avg_crit = prop_df[CRITERIA_COLS].mean()
-            fig_radar = go.Figure(data=go.Scatterpolar(r=avg_crit.values, theta=[c.replace('_', ' ').title() for c in CRITERIA_COLS], fill='toself'))
-            fig_radar.update_layout(polar=dict(radialaxis=dict(range=[0, 5])))
+            fig_radar = go.Figure(data=go.Scatterpolar(
+                r=avg_crit.values, 
+                theta=[c.replace('_', ' ').title() for c in CRITERIA_COLS], 
+                fill='toself', line_color='#1E3A8A'
+            ))
+            fig_radar.update_layout(polar=dict(radialaxis=dict(range=[0, 5])), title="Criteria Performance (Rubric)")
             st.plotly_chart(fig_radar, use_container_width=True, key=f"radar_{proposal}")
 
-        # --- FIXED INDENTATION HERE ---
+        # --- UPDATED TABLE RENDERING (Fixes HTML tag display issue) ---
         with st.expander(f"View Detailed Reviews for {proposal}", expanded=True):
-            # 1. Build Header
             header_row = "".join([f"<th class='col-crit'>{c.replace('_', ' ').title()}</th>" for c in CRITERIA_COLS])
             
-            # 2. Start Table (Ensure no leading spaces in the string)
+            # Start building table as a clean string with NO leading spaces
             table_html = f"<table class='wrapped-table'><thead><tr><th class='col-eval'>Evaluator</th>{header_row}<th class='col-total'>Total</th><th class='col-rec'>Recommendation</th><th class='col-comm'>Comments</th></tr></thead><tbody>"
             
-            # 3. Add Rows (Using single lines to avoid indentation spaces)
             for _, row in prop_df.iterrows():
                 crit_data = "".join([f"<td class='col-crit'>{row.get(c, 0)}</td>" for c in CRITERIA_COLS])
-                
-                # Format comments with line breaks
                 raw_comm = str(row.get('comments', '-')).replace('\n', '<br>')
-                formatted_comment = f"<div class='comment-bubble'>{raw_comm}</div>"
                 
-                # Append row as a single flat string to avoid Markdown code-block interpretation
+                # Assemble row string flatly
                 table_html += "<tr>"
                 table_html += f"<td class='col-eval'><b>{row['evaluator']}</b></td>"
-                table_html += f"{crit_data}"
+                table_html += crit_data
                 table_html += f"<td class='col-total'>{row['total']:.2f}</td>"
                 table_html += f"<td class='col-rec'>{row.get('recommendation', '-')}</td>"
-                table_html += f"<td class='col-comm'>{formatted_comment}</td>"
+                table_html += f"<td class='col-comm'><div class='comment-bubble'>{raw_comm}</div></td>"
                 table_html += "</tr>"
             
-            # 4. Close and Render
             table_html += "</tbody></table>"
-            
-            # IMPORTANT: Use st.html if your streamlit version is 1.34+, 
-            # otherwise keep using st.markdown
             st.markdown(table_html, unsafe_allow_html=True)
+            
+        st.divider()
 else:
     st.title("📊 Live Evaluation Dashboard")
     st.info("Awaiting submissions...")

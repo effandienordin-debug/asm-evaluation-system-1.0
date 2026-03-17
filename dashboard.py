@@ -202,22 +202,40 @@ if not df.empty:
             st.plotly_chart(fig_radar, use_container_width=True, key=f"radar_{proposal}")
 
         with st.expander(f"View Detailed Reviews for {proposal}", expanded=True):
-            header_row = "".join([f"<th class='col-crit'>{c.replace('_', ' ').title()}</th>" for c in CRITERIA_COLS])
-            table_html = f"<table class='wrapped-table'><thead><tr><th class='col-eval'>Evaluator</th>{header_row}<th class='col-total'>Total</th><th class='col-rec'>Recommendation</th><th class='col-comm'>Comments</th></tr></thead><tbody>"
-            for _, row in prop_df.iterrows():
-                crit_data = "".join([f"<td class='col-crit'>{row.get(c, 0)}</td>" for c in CRITERIA_COLS])
-                raw_comm = str(row.get('comments', '-'))
-                formatted_comment = "".join([f"<p> {line.strip()}</p>" for line in raw_comm.split('\n') if line.strip()])
-                
-                table_html += f"""
-                <tr>
-                    <td class='col-eval'><b>{row['evaluator']}</b></td>
-                    {crit_data}
-                    <td class='col-total'>{row['total']:.2f}</td>
-                    <td class='col-rec'>{row.get('recommendation', '-')}</td>
-                    <td class='col-comm'><div class='comment-bubble'>{formatted_comment}</div></td>
-                </tr>
-                """
+    # 1. Build Header
+    header_row = "".join([f"<th class='col-crit'>{c.replace('_', ' ').title()}</th>" for c in CRITERIA_COLS])
+    
+    # 2. Start Table
+    table_html = f"""
+    <table class='wrapped-table'>
+        <thead>
+            <tr>
+                <th class='col-eval'>Evaluator</th>
+                {header_row}
+                <th class='col-total'>Total</th>
+                <th class='col-rec'>Recommendation</th>
+                <th class='col-comm'>Comments</th>
+            </tr>
+        </thead>
+        <tbody>
+    """
+    
+    # 3. Add Rows
+    for _, row in prop_df.iterrows():
+        crit_data = "".join([f"<td class='col-crit'>{row.get(c, 0)}</td>" for c in CRITERIA_COLS])
+        
+        # Safety: Clean newlines in comments to prevent HTML breaking
+        raw_comm = str(row.get('comments', '-')).replace('\n', '<br>')
+        
+        table_html += f"""
+        <tr>
+            <td class='col-eval'><b>{row['evaluator']}</b></td>
+            {crit_data}
+            <td class='col-total'>{row['total']:.2f}</td>
+            <td class='col-rec'>{row.get('recommendation', '-')}</td>
+            <td class='col-comm'><div class='comment-bubble'>{raw_comm}</div></td>
+        </tr>
+        """
             table_html += "</tbody></table>"
             st.markdown(table_html, unsafe_allow_html=True)
         st.divider()
